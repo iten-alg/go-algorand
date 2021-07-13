@@ -245,6 +245,12 @@ type OpStream struct {
 	OffsetToLine map[int]int
 
 	HasStatefulOps bool
+
+	// basic blocks for static analysis
+	blocks []BasicBlock
+
+	// counter to stop analysis from being sucked in to huge number of paths
+	paths int
 }
 
 // GetVersion returns the LogicSigVersion we're building to
@@ -294,11 +300,6 @@ func (ops *OpStream) tpusha(argType []StackType) {
 	ops.typeStack = append(ops.typeStack, argType...)
 }
 
-func tpusha2(argType []StackType, stack []StackType) []StackType {
-	stack = append(stack, argType...)
-	return stack
-}
-
 func (ops *OpStream) tpop() (argType StackType) {
 	if len(ops.typeStack) == 0 {
 		argType = StackNone
@@ -308,18 +309,6 @@ func (ops *OpStream) tpop() (argType StackType) {
 	argType = ops.typeStack[last]
 	ops.typeStack = ops.typeStack[:last]
 	return
-}
-
-func tpop2(stack []StackType) (StackType, []StackType) {
-	var argType StackType
-	if len(stack) == 0 {
-		argType = StackNone
-		return argType, stack
-	}
-	last := len(stack) - 1
-	argType = stack[last]
-	stack = stack[:last]
-	return argType, stack
 }
 
 // Intc writes opcodes for loading a uint64 constant onto the stack.
@@ -1080,18 +1069,6 @@ func typecheck(expected, got StackType) bool {
 	return expected == got
 }
 
-func typecheck2(expected, got StackType) bool {
-	//Since I clear the stack at start of every block, I need to take out StackNone check
-	//Also doesn't original typecheck error if someone loops to push a bunch onto the stack and then jumps and pops the same cuz the assembler stack would not keep track?
-	if got == StackNone {
-		return true
-	}
-	if (expected == StackAny) || (got == StackAny) {
-		return true
-	}
-	return expected == got
-}
-
 var spaces = [256]uint8{'\t': 1, ' ': 1}
 
 func fieldsFromLine(line string) []string {
@@ -1185,9 +1162,13 @@ func (ops *OpStream) checkArgs(spec OpSpec) {
 		} else {
 			ops.trace(", %s", argType.String())
 		}
-		if !typecheck2(argType, stype) {
+		if !typecheck(argType, stype) {
 			err := fmt.Errorf("%s arg %d wanted type %s got %s", spec.Name, i, argType.String(), stype.String())
-			ops.error(err)
+			if len(ops.labelReferences) > 0 {
+				ops.warnf("%w; but branches have happened and assembler does not precisely track types in this case", err)
+			} else {
+				ops.error(err)
+			}
 		}
 	}
 	if !firstPop {
@@ -1206,164 +1187,195 @@ func (ops *OpStream) checkArgs(spec OpSpec) {
 	}
 }
 
-func (ops *OpStream) checkArgs2(spec OpSpec, stack []StackType) []StackType {
-	var stype StackType
-	for i := len(spec.Args) - 1; i >= 0; i-- {
-		argType := spec.Args[i]
-		stype, stack = tpop2(stack)
-		if !typecheck(argType, stype) {
-			err := fmt.Errorf("%s arg %d wanted type %s got %s", spec.Name, i, argType.String(), stype.String())
-			ops.error(err)
+type BasicBlock struct {
+	startIndex       int         //starting position in ops.pending
+	endIndex         int         //ending position in ops.pending (inclusive boundarywise but does not include immediates)
+	jumpTo           int         //index in ops.blocks of block that can be jumped to from this block
+	flowTo           int         //index in ops.blocks of block that follows if jumpTo is not taken
+	expectedStackTop []StackType //What the block requires to be on top of the stack at entry
+	stackDelta       []StackType //What the top of the stack will look like on exit
+	loopHeadStack    []StackType
+}
+
+const nowhere int = -1
+const needToAdd int = -2
+const exiting int = -3
+
+func equals(stack1, stack2 []StackType) bool {
+	//Don't need to check length b/c in its use case, the slices are forced to be same length
+	for i := range stack1 {
+		if stack1[i] != stack2[i] {
+			return false
 		}
 	}
-
-	if len(spec.Returns) > 0 {
-		stack = tpusha2(spec.Returns, stack)
-	}
-	return stack
-}
-
-type BasicBlock struct {
-	//indices into programOpcodes in assemble
-	startIndex int
-	endIndex   int
-	jumpTo     int //where label of jump refers to
-	flowTo     int //where branch goes to when it doesn't jump
-	subRetting []int
-}
-
-func (b *BasicBlock) newBlock() {
-}
-
-type Set struct {
-	items map[int]struct{}
-}
-
-func (s *Set) contains(x int) bool {
-	_, ok := s.items[x]
-	return ok
-}
-func (s *Set) add(x int) bool {
-	if s.contains(x) {
-		return false
-	}
-	s.items[x] = struct{}{}
 	return true
 }
 
-var unconditional = []string{"b", "callsub"}
-var conditional = []string{"bnz", "bz"}
-
-const exit int = -11
-const subretting int = -7
-const nowhere int = -1
-
-func createBlocks(leaders []int, tempLabels map[string]int, tempLabelsReversed map[int]string) (blocks []BasicBlock) {
-	var currentBlock BasicBlock
-	i := 0
-	for _, k := range leaders {
-		currentBlock.startIndex = k
-		label, ok := tempLabelsReversed[k]
-		if ok {
-			tempLabels[label] = i
-		}
-		if i > 0 {
-			blocks[i-1].endIndex = k - 1
-		}
-		blocks = append(blocks, currentBlock)
-		i++
-	}
-	blocks = append(blocks, BasicBlock{exit, exit, exit, exit, []int{}})
-	return
-}
-
-func addJumpsAndFlow(blocks []BasicBlock, tempLabels map[string]int, tempRefs map[int]string, programOps []byte, version uint64) []BasicBlock {
-	var endOp OpSpec
-	var endInd int
-	for i := range blocks[0 : len(blocks)-1] {
-		endInd = blocks[i].endIndex
-		endOp = opsByOpcode[version][programOps[endInd]]
-		if programOps[endInd] > 0xaf {
-			endOp = keywords[getKeyName(programOps[endInd])]
-		}
-		if contains(unconditional, endOp.Name) {
-			blocks[i].jumpTo = tempLabels[tempRefs[endInd]]
-			blocks[i].flowTo = nowhere
-		} else if contains(conditional, endOp.Name) {
-			blocks[i].jumpTo = tempLabels[tempRefs[endInd]]
-			blocks[i].flowTo = i + 1
-		} else if (endOp.Name == "return") || (endOp.Name == "err") {
-			blocks[i].jumpTo = len(blocks) - 1
-			blocks[i].flowTo = nowhere
-		} else if endOp.Name == "retsub" {
-			blocks[i].jumpTo = subretting
-			blocks[i].flowTo = nowhere
-		} else {
-			blocks[i].jumpTo = nowhere
-			blocks[i].flowTo = i + 1
+func findLoop(slice []int, x int) []int {
+	for i, val := range slice {
+		if val == x {
+			return slice[i:]
 		}
 	}
-	return blocks
+	return []int{}
 }
-func (ops *OpStream) newTypeCheck(blocks []BasicBlock, start int, opBytes []byte, currTypeStack []StackType) {
-	currBlock := blocks[start]
-	currIndex := currBlock.startIndex
-	fmt.Printf("%+v\n", currBlock)
-	var spec OpSpec
-	if currIndex != exit {
-		for currIndex <= currBlock.endIndex {
-			if opBytes[currIndex] <= 0xaf {
-				spec = opsByOpcode[ops.Version][opBytes[currIndex]]
-			} else {
-				spec = keywords[getKeyName(opBytes[currIndex])]
+
+func (ops *OpStream) NoPathDelta(path []int) bool {
+	blocks := ops.blocks
+	saved := blocks[path[0]].expectedStackTop
+	stack := make([]StackType, len(saved))
+	copy(stack, saved)
+	for _, val := range path {
+		stack = stack[0 : len(stack)-len(blocks[val].expectedStackTop)]
+		stack = append(stack, blocks[val].stackDelta...)
+	}
+	return equals(stack, saved)
+}
+func (ops *OpStream) firstPathsCheck(blockIndex int, stack []StackType, path []int) {
+	ops.paths++
+	if ops.paths > 10000 {
+		err := fmt.Errorf("too many potential paths to analyze")
+		ops.error(err)
+	} else {
+		block := ops.blocks[blockIndex]
+		dif := len(stack) - len(block.expectedStackTop)
+		if dif >= 0 {
+			if equals(stack[dif:], block.expectedStackTop) {
+				loopPath := findLoop(path, blockIndex)
+				if len(loopPath) > 0 {
+					stack = append(stack[0:dif], block.stackDelta...)
+					if block.jumpTo >= 0 {
+						ops.firstPathsCheck(block.jumpTo, stack, append(path, blockIndex))
+					}
+					if block.flowTo >= 0 {
+						ops.firstPathsCheck(block.flowTo, stack, append(path, blockIndex))
+					}
+				} else {
+					if len(block.loopHeadStack) == 0 {
+						if ops.NoPathDelta(loopPath) {
+							block.loopHeadStack = stack
+						} else {
+							ops.sourceLine = ops.OffsetToLine[block.startIndex]
+							err := fmt.Errorf("a path down this loop causes the stack to potentially change uncontrollably")
+							ops.warnf("%w", err)
+						}
+					} else if !equals(stack, block.loopHeadStack) {
+						ops.sourceLine = ops.OffsetToLine[block.startIndex]
+						err := fmt.Errorf("different paths down nearby loop cause different loop top stacks")
+						ops.warnf("%w", err)
+						//This should also cover the case where two loops have the same head but change the stack in different ways
+					}
+					//else case means all good, but we should not keep going through blocks as we already sent a path down before
+				}
 			}
-			//fmt.Println(spec.Name)
-			//for k := range currTypeStack {
-			//fmt.Println(k)
-			//}
-			currTypeStack = ops.checkArgs2(spec, currTypeStack)
-			currIndex++
-		}
-		if (currBlock.jumpTo != nowhere) && (currBlock.flowTo != nowhere) {
-			//saved := make([]StackType, len(currTypeStack))
-			//copy(saved, currTypeStack)
-			ops.newTypeCheck(blocks, currBlock.jumpTo, opBytes, currTypeStack)
-			//currTypeStack = currTypeStack[:0]
-			//currTypeStack = append(currTypeStack, saved...)
-			ops.newTypeCheck(blocks, currBlock.flowTo, opBytes, currTypeStack)
-		} else if currBlock.jumpTo != nowhere {
-			ops.newTypeCheck(blocks, currBlock.jumpTo, opBytes, currTypeStack)
-		} else {
-			ops.newTypeCheck(blocks, currBlock.flowTo, opBytes, currTypeStack)
 		}
 	}
-
 }
-func contains(arr []string, val string) bool {
-	for _, v := range arr {
-		if v == val {
-			return true
+
+func (ops *OpStream) annotateBlockInOut() {
+	blocks := ops.blocks
+	var j int
+	var spec OpSpec
+	var top []StackType
+	var out []StackType
+	raw := ops.pending.Bytes()
+	for i := range blocks {
+		j = blocks[i].startIndex
+		ops.typeStack = ops.typeStack[:0]
+		top = make([]StackType, 0)
+		for j <= blocks[i].endIndex {
+			spec = opsByOpcode[ops.Version][raw[j]]
+			for k := len(spec.Args) - 1; k >= 0; k-- {
+				argType := spec.Args[i]
+				sType := ops.tpop()
+				if sType == StackNone {
+					top = append(top, argType)
+				} else if (argType != StackAny) && (sType != StackAny) && (argType != sType) {
+					ops.sourceLine = ops.OffsetToLine[j]
+					err := fmt.Errorf("%s arg %d wanted type %s got %s", spec.Name, i, argType.String(), sType.String())
+					ops.error(err)
+				}
+			}
+			if len(spec.Returns) > 0 {
+				ops.tpusha(spec.Returns)
+			}
+			j = j + spec.Details.Size
+		}
+		//Not sure if slices require you to make copies like this
+		out = make([]StackType, len(ops.typeStack))
+		copy(out, ops.typeStack)
+		blocks[i].stackDelta = out
+		blocks[i].expectedStackTop = top
+
+	}
+}
+func (ops *OpStream) addBlockJumps(indexToBlock map[int]int) {
+	blocks := ops.blocks
+	raw := ops.pending.Bytes()
+	var spec OpSpec
+	for i := range blocks {
+		spec = opsByOpcode[ops.Version][raw[blocks[i].endIndex]]
+		switch spec.Name {
+		case "bz", "bnz", "b":
+			x, ok := indexToBlock[blocks[i].jumpTo]
+			if ok {
+				blocks[i].jumpTo = x
+			} else {
+				blocks[i].jumpTo = exiting //if a label index is not in indexToBlock it is an end label or super weird
+			}
 		}
 	}
-	return false
 }
 
-func getKeyByte(name string) byte {
-	if name == "int" {
-		return 0xb0
-	} else if name == "byte" {
-		return 0xb1
+//createBlocks sets up the basic blocks to be used in static analysis; note no block is added for labels at end of program
+func (ops *OpStream) createBlocks(reverseLabels map[int]string) map[int]int {
+	indexToBlock := make(map[int]int)
+	var blocks []BasicBlock
+	raw := ops.pending.Bytes()
+	startI := 0
+	i := 0         //index over raw
+	refsIndex := 0 //taking advantage of fact labelRefs is "sorted" automatically
+	var spec OpSpec
+	var _ string
+	var ok bool
+	for i < len(raw) {
+		spec = opsByOpcode[ops.Version][raw[i]]
+		_, ok = reverseLabels[i+spec.Details.Size] //checks if next instruction was a label
+		if i == ops.labelReferences[refsIndex].position {
+			//We put the start indices of where we jump to b/c we will have map from start indices to blocks after
+			if spec.Name == "bz" || spec.Name == "bnz" {
+				blocks = append(blocks, BasicBlock{startIndex: startI, endIndex: i, jumpTo: ops.labels[ops.labelReferences[refsIndex].label], flowTo: len(blocks) + 1})
+				indexToBlock[startI] = len(blocks) - 1
+			} else if spec.Name == "b" {
+				blocks = append(blocks, BasicBlock{startIndex: startI, endIndex: i, jumpTo: ops.labels[ops.labelReferences[refsIndex].label], flowTo: nowhere})
+				indexToBlock[startI] = len(blocks) - 1
+			}
+			refsIndex++
+			i = i + spec.Details.Size
+			startI = i
+			//eventually need to deal with callsub
+		} else if spec.Name == "return" || spec.Name == "err" {
+			blocks = append(blocks, BasicBlock{startIndex: startI, endIndex: i, jumpTo: exiting, flowTo: nowhere})
+			indexToBlock[startI] = len(blocks) - 1
+			i = i + spec.Details.Size
+			startI = i
+		} else if spec.Name == "assert" {
+			blocks = append(blocks, BasicBlock{startIndex: startI, endIndex: i, jumpTo: exiting, flowTo: len(blocks) + 1})
+			indexToBlock[startI] = len(blocks) - 1
+			i = i + spec.Details.Size
+			startI = i
+		} else if ok {
+			if startI != i {
+				//Want to make sure we are not duplicating blocks if there is a branch right before a label
+				blocks = append(blocks, BasicBlock{startIndex: startI, endIndex: i, jumpTo: nowhere, flowTo: len(blocks) + 1})
+				indexToBlock[startI] = len(blocks) - 1
+				startI = i
+			}
+			i = i + spec.Details.Size
+		}
 	}
-	return 0xb2
-}
-
-func getKeyName(code byte) string {
-	if code == 0xb0 {
-		return "int"
-	} else if code == 0xb1 {
-		return "byte"
-	}
-	return "addr"
+	ops.blocks = blocks
+	return indexToBlock
 }
 
 // assemble reads text from an input and accumulates the program
@@ -1371,21 +1383,8 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 	if ops.Version > LogicVersion && ops.Version != assemblerNoVersion {
 		return ops.errorf("Can not assemble version %d", ops.Version)
 	}
-	keyworded := false
 	scanner := bufio.NewScanner(fin)
 	ops.sourceLine = 0
-	var programOpcodes []byte
-	var blocks []BasicBlock
-	tempLabels := make(map[string]int)
-	tempLabelsReversed := make(map[int]string)
-	tempRefs := make(map[int]string)
-	leadersSet := Set{}
-	leadersSet.items = make(map[int]struct{})
-	leadersSet.add(0)
-	var leaders []int
-	leaders = append(leaders, 0)
-	var stack []StackType
-
 	for scanner.Scan() {
 		ops.sourceLine++
 		line := scanner.Text()
@@ -1417,14 +1416,7 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 			ops.createLabel(opstring[:len(opstring)-1])
 			fields = fields[1:]
 			if len(fields) == 0 {
-				tempLabels[opstring[:len(opstring)-1]] = len(programOpcodes)
-				tempLabelsReversed[len(programOpcodes)] = opstring[:len(opstring)-1]
-				if leadersSet.add(len(programOpcodes)) {
-					leaders = append(leaders, len(programOpcodes))
-				}
 				// There was a label, not need to ops.trace this
-				// Clear stack b/c starting new block most likely; ppl who add labels that aren't targeted don't get proper typechecks
-				ops.typeStack = ops.typeStack[:0]
 				continue
 			}
 			opstring = fields[0]
@@ -1433,8 +1425,6 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 		spec, ok := OpsByName[ops.Version][opstring]
 		if !ok {
 			spec, ok = keywords[opstring]
-			programOpcodes = append(programOpcodes, getKeyByte(opstring))
-			keyworded = true
 		}
 		if ok {
 			ops.trace("%3d: %s\t", ops.sourceLine, opstring)
@@ -1443,20 +1433,6 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 				ops.HasStatefulOps = true
 			}
 			ops.checkArgs(spec)
-			if !keyworded {
-				programOpcodes = append(programOpcodes, spec.Opcode)
-			} else {
-				keyworded = false
-			}
-			if contains(unconditional, spec.Name) || contains(conditional, spec.Name) {
-				if len(fields[1:]) == 1 {
-					tempRefs[len(programOpcodes)-1] = fields[1]
-					if leadersSet.add(len(programOpcodes)) {
-						leaders = append(leaders, len(programOpcodes))
-					}
-				}
-			}
-
 			spec.asm(ops, &spec, fields[1:])
 			ops.trace("\n")
 			continue
@@ -1469,6 +1445,7 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 			ops.errorf("unknown opcode: %s", opstring)
 		}
 	}
+
 	// backward compatibility: do not allow jumps behind last instruction in TEAL v1
 	if ops.Version <= 1 {
 		for label, dest := range ops.labels {
@@ -1476,12 +1453,6 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 				ops.errorf("label %#v is too far away", label)
 			}
 		}
-	}
-	if ops.Version < 4 {
-		blocks = createBlocks(leaders, tempLabels, tempLabelsReversed)
-		blocks[len(blocks)-2].endIndex = len(programOpcodes) - 1
-		blocks = addJumpsAndFlow(blocks, tempLabels, tempRefs, programOpcodes, ops.Version)
-		ops.newTypeCheck(blocks, 0, programOpcodes, stack)
 	}
 
 	if ops.Version >= optimizeConstantsEnabledVersion {
@@ -1491,6 +1462,21 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 
 	// TODO: warn if expected resulting stack is not len==1 ?
 	ops.resolveLabels()
+	reverseLabels := make(map[int]string)
+	for key, val := range ops.labels {
+		reverseLabels[val] = key
+	}
+	if ops.Errors != nil {
+		//Note although I have not limited version, this will currently go haywire if callsub/retsub op is included
+		ops.paths = 0
+		ops.addBlockJumps(ops.createBlocks(reverseLabels))
+		ops.annotateBlockInOut()
+		var stack []StackType
+		var path []int
+		ops.firstPathsCheck(0, stack, path)
+	} else {
+		ops.warn("Note errors need to be fixed before in depth bug-detection analysis can occur")
+	}
 	program := ops.prependCBlocks()
 	if ops.Errors != nil {
 		l := len(ops.Errors)
