@@ -354,7 +354,7 @@ func TestAssemble(t *testing.T) {
 				}
 			}
 
-			ops := testProg(t, obfuscate(nonsense[v]), v)
+			ops := testProg(t, nonsense[v], v)
 			// check that compilation is stable over
 			// time. we must assemble to the same bytes
 			// this month that we did last month.
@@ -1302,13 +1302,13 @@ func TestAssembleDisassembleCycle(t *testing.T) {
 	// catch any suprises.
 	for v, source := range tests {
 		t.Run(fmt.Sprintf("v=%d", v), func(t *testing.T) {
-			ops := testProg(t, obfuscate(source), v)
+			ops := testProg(t, source, v)
 			t2, err := Disassemble(ops.Program)
 			require.NoError(t, err)
-			none := testProg(t, obfuscate(t2), assemblerNoVersion)
+			none := testProg(t, t2, assemblerNoVersion)
 			require.Equal(t, ops.Program[1:], none.Program[1:])
 			t3 := "// " + t2 // This comments out the #pragma version
-			current := testProg(t, obfuscate(t3), AssemblerMaxVersion)
+			current := testProg(t, t3, AssemblerMaxVersion)
 			require.Equal(t, ops.Program[1:], current.Program[1:])
 		})
 	}
@@ -2079,27 +2079,36 @@ func TestDigAsm(t *testing.T) {
 
 }
 
-func TestBlockTypeCheck(t *testing.T) {
+func TestEqualsTypeCheck(t *testing.T) {
 	t.Parallel()
-	//If we evaluate and error on dead code or explore paths we'll have to change these, but for now it's fine
-	//All just confirm we can now error on blocks containing internal type errors
-	errmsg := "len arg 0..."
-	checkFlow := "int 1; bnz hello; int 3; len; hello:; int 2; +"
-	checkJump := "int 1; bnz hello; int 4; int 2; +; hello:; int 3; len"
-	checkFirst := "int 1; len; int 3; bnz hello; int 4; hello:; int 1"
-	checkStackNoneFirst := "len"
-	//Check to make sure we don't error since can't know (currently) what comes into block unless first block
-	checkStackNone := "b hello; hello:; len"
+	testProg(t, "int 1; byte 0x1234; ==", AssemblerMaxVersion, expect{3, "== arg 0..."})
+	testProg(t, "int 1; byte 0x1234; !=", AssemblerMaxVersion, expect{3, "!= arg 0..."})
+	testProg(t, "byte 0x1234; int 1; ==", AssemblerMaxVersion, expect{3, "== arg 0..."})
+	testProg(t, "byte 0x1234; int 1; !=", AssemblerMaxVersion, expect{3, "!= arg 0..."})
+}
 
-	for i := uint64(1); i <= AssemblerMaxVersion; i++ {
-		//b introduced in v2
-		if i > 1 {
-			testProg(t, checkStackNone, i)
-		}
-		testProg(t, checkFlow, i, expect{4, errmsg})
-		testProg(t, checkJump, i, expect{8, errmsg})
-		testProg(t, checkFirst, i, expect{2, errmsg})
-		testProg(t, checkStackNoneFirst, i, expect{1, "len expects..."})
+func TestDupTypeCheck(t *testing.T) {
+	t.Parallel()
+	testProg(t, "int 1; byte 0x1234; dup; +", AssemblerMaxVersion, expect{4, "+ arg 1..."})
+	testProg(t, "byte 0x1234; int 1; dup; +", AssemblerMaxVersion)
+	testProg(t, "byte 0x1234; int 1; dup2; +", AssemblerMaxVersion, expect{4, "+ arg 0..."})
+	testProg(t, "int 1; byte 0x1234; dup2; +", AssemblerMaxVersion, expect{4, "+ arg 1..."})
 
-	}
+	testProg(t, "byte 0x1234; int 1; dup; dig 1; len", AssemblerMaxVersion, expect{5, "len arg 0..."})
+	testProg(t, "int 1; byte 0x1234; dup; dig 1; !", AssemblerMaxVersion, expect{5, "! arg 0..."})
+
+	testProg(t, "byte 0x1234; int 1; dup2; dig 2; len", AssemblerMaxVersion, expect{5, "len arg 0..."})
+	testProg(t, "int 1; byte 0x1234; dup2; dig 2; !", AssemblerMaxVersion, expect{5, "! arg 0..."})
+}
+
+func TestSelectTypeCheck(t *testing.T) {
+	t.Parallel()
+	testProg(t, "int 1; int 2; int 3; select; len", AssemblerMaxVersion, expect{5, "len arg 0..."})
+	testProg(t, "byte 0x1234; byte 0x5678; int 3; select; !", AssemblerMaxVersion, expect{5, "! arg 0..."})
+}
+
+func TestSetBitTypeCheck(t *testing.T) {
+	t.Parallel()
+	testProg(t, "int 1; int 2; int 3; setbit; len", AssemblerMaxVersion, expect{5, "len arg 0..."})
+	testProg(t, "byte 0x1234; int 2; int 3; setbit; !", AssemblerMaxVersion, expect{5, "! arg 0..."})
 }
