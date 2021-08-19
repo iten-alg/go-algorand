@@ -265,6 +265,12 @@ type OpStream struct {
 
 	// helper index to create Blocks
 	pcIndex int
+
+	//Keeps track of number of times an intcblock has already been created
+	intcBlockCount int
+
+	//Same for bytecblock
+	bytecBlockCount int
 }
 
 // GetVersion returns the LogicSigVersion we're building to
@@ -303,6 +309,8 @@ func (ops *OpStream) ReferToLabel(pc int, label string) {
 type opTypeFunc func(ops *OpStream, immediates []string) (StackTypes, StackTypes)
 
 type opJumpFunc func(ops *OpStream)
+
+type opActionFunc func(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge
 
 // returns allows opcodes like `txn` to be specific about their return
 // value types, based on the field requested, rather than use Any as
@@ -1085,34 +1093,40 @@ func asmDefault(ops *OpStream, spec *OpSpec, args []string) error {
 	return nil
 }
 
-func jumpErr(ops *OpStream){
-	ops.currBlock.jumpTo=erroring
-	ops.currBlock.flowTo=nowhere
+func jumpErr(ops *OpStream) {
+	ops.currBlock.jumpTo = erroring
+	ops.currBlock.flowTo = nowhere
 	ops.appendBlock()
 }
 
-func jumpRetSub(ops *OpStream){
-	ops.currBlock.jumpTo=subRets
-	ops.currBlock.flowTo=nowhere
+func jumpRetSub(ops *OpStream) {
+	ops.currBlock.jumpTo = subRets
+	ops.currBlock.flowTo = nowhere
 	ops.appendBlock()
 }
 
-func jumpReturn(ops *OpStream){
-	ops.currBlock.jumpTo=exiting
-	ops.currBlock.flowTo=nowhere
+func jumpReturn(ops *OpStream) {
+	ops.currBlock.jumpTo = exiting
+	ops.currBlock.flowTo = nowhere
 	ops.appendBlock()
+}
+
+func jumpCallSub(ops *OpStream) {
+	ops.currBlock.callSubs = true
+	ops.currBlock.flowTo = len(ops.blocks) + 1
 }
 
 //This gets used for callsub for now b/c we're not going through subroutines yet
-func jumpConditionalBranch(ops *OpStream){
-	ops.currBlock.flowTo=len(ops.blocks)+1
+func jumpConditionalBranch(ops *OpStream) {
+	ops.currBlock.flowTo = len(ops.blocks) + 1
 	ops.appendBlock()
 }
 
-func jumpUnconditionalBranch(ops *OpStream){
-	ops.currBlock.flowTo=nowhere
+func jumpUnconditionalBranch(ops *OpStream) {
+	ops.currBlock.flowTo = nowhere
 	ops.appendBlock()
 }
+
 func typeSwap(ops *OpStream, args []string) (StackTypes, StackTypes) {
 	topTwo := oneAny.plus(oneAny)
 	top := len(ops.typeStack) - 1
@@ -1256,15 +1270,421 @@ func typeUncover(ops *OpStream, args []string) (StackTypes, StackTypes) {
 	return anys, returns
 }
 
+func ZeroBytes() []byte {
+	return make([]byte, 32)
+}
+
+func FFBytes() []byte {
+	address := make([]byte, 32)
+	for i := range address {
+		address[i] = 0xff
+	}
+	return address
+}
+
+func unknownKnowledge() []StackKnowledge {
+	return []StackKnowledge{{valKnown: false}}
+}
+
+func oneUintK(val uint64) []StackKnowledge {
+	return []StackKnowledge{{valKnown: true, valUint: val}}
+}
+
+func oneBytesK(val []byte) []StackKnowledge {
+	return []StackKnowledge{{valKnown: true, valBytes: val}}
+}
+
+type bugCheckRound = int
+
+const feeCheck bugCheckRound = 0
+const closeCheck bugCheckRound = 1
+const assetCloseCheck bugCheckRound = 2
+const rekeyCheck bugCheckRound = 3
+const appDeleteCheck bugCheckRound = 4
+const appUpdateCheck bugCheckRound = 5
+
+const highFee uint64 = 2000000
+
+func actEquals(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	length := len(ops.currBlock.valStacks[round])
+	if length < 2 {
+		return unknownKnowledge()
+	} else {
+		top := ops.currBlock.valStacks[round][length-1]
+		second := ops.currBlock.valStacks[round][length-2]
+		if !top.valKnown || !second.valKnown {
+			return unknownKnowledge()
+		} else {
+			equals := false
+			topType := ops.typeStack[length-1]
+			if topType == StackUint64 {
+				a := second.valUint
+				b := top.valUint
+				equals = a == b
+			} else {
+				a := second.valBytes
+				b := top.valBytes
+				equals = bytes.Equal(a, b)
+			}
+			if equals {
+				return oneUintK(1)
+			}
+			return oneUintK(0)
+		}
+	}
+}
+
+func actNotEquals(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	equals := actEquals(ops, spec, immediates, round)
+	if equals[0].valKnown {
+		if equals[0].valUint == 1 {
+			return oneUintK(0)
+		}
+		return oneUintK(1)
+	}
+	return unknownKnowledge()
+}
+
+func actDup(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	top := unknownKnowledge()
+	length := len(ops.currBlock.valStacks[round])
+	if length > 0 {
+		top[0] = ops.currBlock.valStacks[round][length-1]
+	}
+	return top
+}
+
+func actDupTwo(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	topTwo := []StackKnowledge{{}, {}}
+	length := len(ops.currBlock.valStacks[round])
+	if length > 0 {
+		topTwo[1] = ops.currBlock.valStacks[round][length-1]
+		if length > 1 {
+			topTwo[0] = ops.currBlock.valStacks[round][length-2]
+		}
+	}
+	return topTwo
+}
+
+func actSwap(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	returns := actDupTwo(ops, spec, immediates, round)
+	saved := returns[0]
+	returns[0] = returns[1]
+	returns[1] = saved
+	return returns
+}
+
+func actDig(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	if len(immediates) == 0 {
+		return unknownKnowledge()
+	}
+	n, err := strconv.ParseUint(immediates[0], 0, 64)
+	if err != nil {
+		return unknownKnowledge()
+	}
+	depth := int(n) + 1
+	returns := make([]StackKnowledge, depth+1)
+	idx := len(ops.currBlock.valStacks[round]) - depth
+	if idx >= 0 {
+		returns[len(returns)-1] = ops.currBlock.valStacks[round][idx]
+		for i := idx + 1; i < len(ops.currBlock.valStacks[round]); i++ {
+			returns[i-idx-1] = ops.currBlock.valStacks[round][i]
+		}
+	}
+	return returns
+}
+
+// pushint does not allow enums during assembly, but I'm going to use this for both int and pushint in case that ever changes
+func actInt(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	val, got := txnTypeConstToUint64[immediates[0]]
+	if !got {
+		val, got = txnTypeIndexes[immediates[0]]
+		if !got {
+			val, got = onCompletionConstToUint64[immediates[0]]
+			if !got {
+				val, _ = strconv.ParseUint(immediates[0], 0, 64)
+			}
+		}
+	}
+	return oneUintK(val)
+}
+
+func actIntcBlock(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	ops.intcBlockCount++
+	return nil
+}
+
+func actIntc(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	if ops.intcBlockCount != 1 {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	constIndex, _ := strconv.ParseUint(immediates[0], 0, 64)
+	//this should never happen since it should error but I'll check anyways
+	if uint(constIndex) >= uint(len(ops.intc)) {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	return oneUintK(ops.intc[constIndex])
+}
+
+func actQuickIntc(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	//This func is for the intc_* ops
+	if ops.intcBlockCount != 1 {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	constIndex, _ := strconv.ParseInt(spec.Name[5:], 10, 0)
+	if uint(constIndex) >= uint(len(ops.intc)) {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	return oneUintK(ops.intc[constIndex])
+}
+
+func actBytes(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	val, _, _ := parseBinaryArgs(immediates)
+	return oneBytesK(val)
+}
+
+func actAddr(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	val, _ := basics.UnmarshalChecksumAddress(immediates[0])
+	return oneBytesK(val[:])
+}
+
+func actGlobal(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	fs, _ := globalFieldSpecByName[immediates[0]]
+	if fs.gfield == ZeroAddress {
+		return oneBytesK(ZeroBytes())
+	} else if fs.gfield == MinTxnFee && round == feeCheck {
+		return oneUintK(highFee / 4) //Since minFee is consensus parameter we can't go based off that, hopefully highFee stays above 4*minFee
+	}
+	return unknownKnowledge()
+}
+
+func actBytecBlock(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	ops.bytecBlockCount++
+	return nil
+}
+
+func actBytec(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	if ops.intcBlockCount != 1 {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	constIndex, _ := strconv.ParseUint(immediates[0], 0, 64)
+	if uint(constIndex) >= uint(len(ops.bytec)) {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	return oneBytesK(ops.bytec[constIndex])
+}
+
+func actQuickBytec(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	if ops.intcBlockCount != 1 {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	constIndex, _ := strconv.ParseInt(spec.Name[6:], 10, 0)
+	if uint(constIndex) >= uint(len(ops.bytec)) {
+		ops.currBlock.jumpInstructions[round] = err
+		return nil
+	}
+	return oneBytesK(ops.bytec[constIndex])
+}
+
+func actBZ(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	length := len(ops.currBlock.valStacks[round])
+	if length > 1 && ops.currBlock.valStacks[round][length-1].valKnown {
+		if ops.currBlock.valStacks[round][length-1].valUint == 0 {
+			ops.currBlock.jumpInstructions[round] = jump
+		} else {
+			ops.currBlock.jumpInstructions[round] = flow
+		}
+	}
+	return nil
+}
+
+func actBNZ(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	length := len(ops.currBlock.valStacks[round])
+	if length > 1 && ops.currBlock.valStacks[round][length-1].valKnown {
+		if ops.currBlock.valStacks[round][length-1].valUint == 0 {
+			ops.currBlock.jumpInstructions[round] = flow
+		} else {
+			ops.currBlock.jumpInstructions[round] = jump
+		}
+	}
+	return nil
+}
+
+func actAssert(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	length := len(ops.currBlock.valStacks[round])
+	if length > 1 && ops.currBlock.valStacks[round][length-1].valKnown {
+		if ops.currBlock.valStacks[round][length-1].valUint == 0 {
+			ops.currBlock.jumpInstructions[round] = err
+		}
+	}
+	return nil
+}
+
+func actTwoIntsOneRetInt(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	length := len(ops.currBlock.valStacks[round])
+	if length < 2 {
+		return unknownKnowledge()
+	} else {
+		top := ops.currBlock.valStacks[round][length-1]
+		second := ops.currBlock.valStacks[round][length-2]
+		if !top.valKnown || !second.valKnown {
+			return unknownKnowledge()
+		} else {
+			b := top.valUint
+			a := second.valUint
+			resultValBool := false
+			switch spec.Name {
+			case "<":
+				resultValBool = a < b
+			case "<=":
+				resultValBool = a <= b
+			case ">":
+				resultValBool = a >= b
+			case ">=":
+				resultValBool = a >= b
+			case "||":
+				resultValBool = (b != 0) || (a != 0)
+			case "&&":
+				resultValBool = (b != 0) && (a != 0)
+			case "+":
+				sum := a + b
+				if sum < a || sum < b {
+					ops.currBlock.jumpInstructions[round] = err
+					return nil
+				}
+				return oneUintK(sum)
+			case "-":
+				if b > a {
+					ops.currBlock.jumpInstructions[round] = err
+					return nil
+				}
+				return oneUintK(a - b)
+			case "*":
+				if (a != 0) && (b != 0) && ((a*b)/a != b) {
+					ops.currBlock.jumpInstructions[round] = err
+					return nil
+				}
+				return oneUintK(a * b)
+			case "/":
+				if b == 0 {
+					ops.currBlock.jumpInstructions[round] = err
+					return nil
+				}
+				return oneUintK(a / b)
+			case "%":
+				if b == 0 {
+					ops.currBlock.jumpInstructions[round] = err
+					return nil
+				}
+				return oneUintK(a % b)
+			case "|":
+				return oneUintK(a | b)
+			case "&":
+				return oneUintK(a & b)
+			case "^":
+				return oneUintK(a ^ b)
+			case "shl":
+				//Eval.go had this check, which makes some sense but it does not appear in TEAL.md at foundation github
+				if b > 63 {
+					ops.currBlock.jumpInstructions[round] = err
+					return nil
+				}
+				return oneUintK(a << b)
+			case "shr":
+				if b > 63 {
+					ops.currBlock.jumpInstructions[round] = err
+					return nil
+				}
+				return oneUintK(a >> b)
+			}
+			if resultValBool {
+				return oneUintK(1)
+			}
+			return oneUintK(0)
+		}
+	}
+}
+
+func actTxn(ops *OpStream, spec *OpSpec, immediates []string, round int) []StackKnowledge {
+	if len(immediates) != 1 {
+		//Txn can become txna in later versions I guess
+		return nil
+	}
+	switch txnFieldSpecByName[immediates[0]].field {
+	case Sender:
+		return oneBytesK(FFBytes())
+	case Fee:
+		if round == feeCheck {
+			return oneUintK(highFee)
+		} else {
+			return unknownKnowledge()
+		}
+	case CloseRemainderTo:
+		if round == closeCheck {
+			return oneBytesK(FFBytes())
+		} else {
+			return unknownKnowledge()
+		}
+	case Type:
+		if round == closeCheck {
+			return oneBytesK([]byte("pay"))
+		} else if round == assetCloseCheck {
+			return oneBytesK([]byte("axfer"))
+		} else if round == appDeleteCheck || round == appUpdateCheck {
+			return oneBytesK([]byte("appl"))
+		} else {
+			return unknownKnowledge()
+		}
+	case TypeEnum:
+		if round == closeCheck {
+			return oneUintK(1)
+		} else if round == assetCloseCheck {
+			return oneUintK(4)
+		} else if round == appDeleteCheck || round == appUpdateCheck {
+			return oneUintK(6)
+		} else {
+			return unknownKnowledge()
+		}
+	case AssetSender:
+		if round == assetCloseCheck {
+			return oneBytesK(ZeroBytes())
+		} else {
+			return unknownKnowledge()
+		}
+	case OnCompletion:
+		if round == appUpdateCheck {
+			return oneUintK(uint64(UpdateApplication))
+		} else if round == appDeleteCheck {
+			return oneUintK(uint64(DeleteApplication))
+		} else {
+			return unknownKnowledge()
+		}
+	case RekeyTo:
+		if round == rekeyCheck {
+			return oneBytesK(FFBytes())
+		} else {
+			return unknownKnowledge()
+		}
+	}
+	return unknownKnowledge()
+}
+
 // keywords handle parsing and assembling special asm language constructs like 'addr'
 // We use OpSpec here, but somewhat degenerate, since they don't have opcodes or eval functions
 var keywords = map[string]OpSpec{
-	"int":  {0, "int", nil, assembleInt, nil, nil, oneInt, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
-	"byte": {0, "byte", nil, assembleByte, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
+	"int":  {0, "int", nil, assembleInt, nil, nil, oneInt, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil, actInt}},
+	"byte": {0, "byte", nil, assembleByte, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil, actBytes}},
 	// parse basics.Address, actually just another []byte constant
-	"addr": {0, "addr", nil, assembleAddr, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
+	"addr": {0, "addr", nil, assembleAddr, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil, actAddr}},
 	// take a signature, hash it, and take first 4 bytes, actually just another []byte constant
-	"method": {0, "method", nil, assembleMethod, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
+	"method": {0, "method", nil, assembleMethod, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil, nil}},
 }
 
 type lineError struct {
@@ -1426,16 +1846,32 @@ const nowhere int = -2
 const exiting int = -3
 const erroring int = -4
 
+type StackKnowledge struct {
+	valUint  uint64
+	valBytes []byte
+	valKnown bool
+}
+
 //A BasicBlock is a structure through which control can only flow in through start and out through end
 type BasicBlock struct {
-	startPc       int         //index into ops.pending.Bytes()
-	endPc         int         //Note this is the beginning of the last op in the block, somewhat unnecessary but we'll keep it for now
-	Args []StackType //What the block requires to be on top of the stack in order to complete
-	Returns       []StackType //What the block net pushes to the stack
-	sourceErrors     []int       //Sourcelines for each entry in Args which is useful for listing sourcelines for errors
-	jumpTo           int         //Index into ops.blocks, where control can jump to out of the block, i.e. via a branch
-	flowTo           int         //Where control can flow to, i.e. the block immediately following a conditional branch
+	startPc          int                //index into ops.pending.Bytes()
+	endPc            int                //Note this is the beginning of the last op in the block, somewhat unnecessary but we'll keep it for now
+	Args             []StackType        //What the block requires to be on top of the stack in order to complete
+	Returns          []StackType        //What the block net pushes to the stack
+	sourceErrors     []int              //Sourcelines for each entry in Args which is useful for listing sourcelines for errors
+	jumpTo           int                //Index into ops.blocks, where control can jump to out of the block, i.e. via a branch
+	flowTo           int                //Where control can flow to, i.e. the block immediately following a conditional branch
+	valStacks        [][]StackKnowledge //Keeps track of the different valStacks (we need one for each different scenario we run)
+	jumpInstructions []byte
+	callStacks       [][]int
+	callSubs         bool
+	visited          []visit
 }
+
+const blockDefault byte = 0x0
+const err byte = 0x1
+const jump byte = 0x2
+const flow byte = 0x3
 
 func (ops *OpStream) fixJumpsAndFlows() {
 	refCount := 0
@@ -1471,6 +1907,96 @@ func (ops *OpStream) appendBlock() {
 	ops.currentArgs = nil
 	ops.currBlock = BasicBlock{startPc: ops.pending.Len()}
 }
+
+func doActFunc(ops *OpStream, spec *OpSpec, immediates []string, args, returns StackTypes) {
+	for round := 0; round < len(ops.currBlock.valStacks); round++ {
+		toAppend := make([]StackKnowledge, len(returns))
+		if spec.Details.actFunc != nil {
+			toAppend = spec.Details.actFunc(ops, spec, immediates, round)
+		}
+		knowledgeLeft := len(ops.currBlock.valStacks[round]) - len(args)
+		if knowledgeLeft < 0 {
+			ops.currBlock.valStacks[round] = nil
+		} else {
+			ops.currBlock.valStacks[round] = ops.currBlock.valStacks[round][:knowledgeLeft]
+		}
+		ops.currBlock.valStacks[round] = append(ops.currBlock.valStacks[round], toAppend...)
+	}
+}
+
+func equals(a []int, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func checkType(ops *OpStream, typeStack StackTypes, expected StackTypes) (StackTypes, bool) {
+	typeLeft := len(typeStack) - len(expected)
+	if typeLeft < 0 {
+		ops.error("Type error")
+		return nil, false
+	}
+	top := typeStack[typeLeft:]
+	for i := range top {
+		if top[i] != StackAny && expected[i] != StackAny {
+			if top[i] != expected[i] {
+				ops.error("Type Error")
+				return nil, false
+			}
+		}
+	}
+	return typeStack[0:typeLeft], true
+}
+
+func findBugs(ops *OpStream, round int, typeStack StackTypes, blockNum int, callStack []int) {
+	if ops.Errors != nil {
+		return
+	}
+	if blockNum < 0 {
+		if blockNum == exiting {
+			ops.error("Terminated with success status despite bad values")
+		}
+		return
+	}
+	for _, v := range ops.blocks[blockNum].visited {
+		if equals(v, callStack) {
+			return
+		}
+	}
+	ops.blocks[blockNum].visited = append(ops.blocks[blockNum].visited, callStack)
+	remaining, ok := checkType(ops, typeStack, ops.blocks[blockNum].Args)
+	if !ok {
+		return
+	}
+	typeStack = append(remaining, ops.blocks[blockNum].Returns...)
+	if ops.blocks[blockNum].callSubs {
+		callStack = append(callStack, blockNum)
+		findBugs(ops, round, typeStack, ops.blocks[blockNum].jumpTo, callStack)
+	} else if ops.blocks[blockNum].jumpTo == subRets {
+		if len(callStack) < 0 {
+			ops.error("Callstack not long enough")
+			return
+		}
+		findBugs(ops, round, typeStack, callStack[len(callStack)-1], callStack[0:len(callStack)-1])
+	} else if ops.blocks[blockNum].jumpTo == erroring || ops.blocks[blockNum].jumpInstructions[round] == err {
+		return
+	} else if ops.blocks[blockNum].jumpInstructions[round] == jump {
+		findBugs(ops, round, typeStack, ops.blocks[blockNum].jumpTo, callStack)
+	} else if ops.blocks[blockNum].jumpInstructions[round] == flow {
+		findBugs(ops, round, typeStack, ops.blocks[blockNum].flowTo, callStack)
+	} else {
+		findBugs(ops, round, typeStack, ops.blocks[blockNum].jumpTo, callStack)
+		findBugs(ops, round, typeStack, ops.blocks[blockNum].flowTo, callStack)
+	}
+}
+
+type visit []int
 
 // assemble reads text from an input and accumulates the program
 func (ops *OpStream) assemble(fin io.Reader) error {
@@ -1543,11 +2069,14 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 				ops.checkStack(args, returns, fields)
 			}
 			spec.asm(ops, &spec, fields[1:])
-			if spec.Details.jumpFunc!=nil {
+			if ops.Errors == nil {
+				doActFunc(ops, &spec, fields[1:], args, returns)
+			}
+			if spec.Details.jumpFunc != nil {
 				spec.Details.jumpFunc(ops)
-				justAddedBlock=true
-			}else{
-				justAddedBlock=false
+				justAddedBlock = true
+			} else {
+				justAddedBlock = false
 			}
 			ops.trace("\n")
 			continue
@@ -1577,6 +2106,10 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 				ops.errorf("label %#v is too far away", label)
 			}
 		}
+	}
+
+	for round := 0; round < len(ops.blocks[0].valStacks); round++ {
+		findBugs(ops, 0)
 	}
 
 	if ops.Version >= optimizeConstantsEnabledVersion {
