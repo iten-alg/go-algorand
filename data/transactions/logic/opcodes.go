@@ -50,13 +50,14 @@ type opDetails struct {
 	checkFunc  opCheckFunc
 	Immediates []immediate
 	typeFunc   opTypeFunc
+	jumpFunc   opJumpFunc
 }
 
-var opDefault = opDetails{1, 1, nil, nil, nil}
-var opBranch = opDetails{1, 3, checkBranch, []immediate{{"target", immLabel}}, nil}
+var opDefault = opDetails{1, 1, nil, nil, nil, nil}
+var opBranch = opDetails{1, 3, checkBranch, []immediate{{"target", immLabel}}, nil, nil}
 
 func costly(cost int) opDetails {
-	return opDetails{cost, 1, nil, nil, nil}
+	return opDetails{cost, 1, nil, nil, nil, nil}
 }
 
 func immediates(names ...string) opDetails {
@@ -64,7 +65,7 @@ func immediates(names ...string) opDetails {
 	for i, name := range names {
 		immediates[i] = immediate{name, immByte}
 	}
-	return opDetails{1, 1 + len(immediates), nil, immediates, nil}
+	return opDetails{1, 1 + len(immediates), nil, immediates, nil, nil}
 }
 
 func stacky(typer opTypeFunc, imms ...string) opDetails {
@@ -74,7 +75,7 @@ func stacky(typer opTypeFunc, imms ...string) opDetails {
 }
 
 func varies(checker opCheckFunc, name string, kind immKind) opDetails {
-	return opDetails{1, 0, checker, []immediate{{name, kind}}, nil}
+	return opDetails{1, 0, checker, []immediate{{name, kind}}, nil, nil}
 }
 
 // immType describes the immediate arguments to an opcode
@@ -358,6 +359,26 @@ var opsByOpcode [LogicVersion + 1][256]OpSpec
 // OpsByName map for each each version, mapping opcode name to OpSpec
 var OpsByName [LogicVersion + 1]map[string]OpSpec
 
+// Now that opDetails has this additional component, jumpFunc, we need to go through and add them to the specs in init
+func addJumpFuncs() {
+	for i := range OpSpecs {
+		switch OpSpecs[i].Name {
+		case "err":
+			OpSpecs[i].Details.jumpFunc = jumpErr
+		case "bnz", "bz":
+			OpSpecs[i].Details.jumpFunc = jumpConditionalBranch
+		case "b":
+			OpSpecs[i].Details.jumpFunc = jumpUnconditionalBranch
+		case "return":
+			OpSpecs[i].Details.jumpFunc = jumpReturn
+		case "callsub":
+			OpSpecs[i].Details.jumpFunc = jumpConditionalBranch
+		case "retsub":
+			OpSpecs[i].Details.jumpFunc = jumpRetSub
+		}
+	}
+}
+
 // Migration from TEAL v1 to TEAL v2.
 // TEAL v1 allowed execution of program with version 0.
 // With TEAL v2 opcode versions are introduced and they are bound to every opcode.
@@ -365,6 +386,7 @@ var OpsByName [LogicVersion + 1]map[string]OpSpec
 // To preserve backward compatibility version 0 array is populated with TEAL v1 opcodes
 // with the version overwritten to 0.
 func init() {
+	addJumpFuncs()
 	// First, initialize baseline v1 opcodes.
 	// Zero (empty) version is an alias for TEAL v1 opcodes and needed for compatibility with v1 code.
 	OpsByName[0] = make(map[string]OpSpec, 256)

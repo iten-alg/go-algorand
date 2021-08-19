@@ -361,7 +361,7 @@ func TestAssemble(t *testing.T) {
 				}
 			}
 
-			ops := testProg(t, nonsense[v], v)
+			ops := testProg(t, obfuscate(nonsense[v]), v)
 			// check that compilation is stable over
 			// time. we must assemble to the same bytes
 			// this month that we did last month.
@@ -1349,13 +1349,13 @@ func TestAssembleDisassembleCycle(t *testing.T) {
 	// catch any suprises.
 	for v, source := range tests {
 		t.Run(fmt.Sprintf("v=%d", v), func(t *testing.T) {
-			ops := testProg(t, source, v)
+			ops := testProg(t, obfuscate(source), v)
 			t2, err := Disassemble(ops.Program)
 			require.NoError(t, err)
-			none := testProg(t, t2, assemblerNoVersion)
+			none := testProg(t, obfuscate(t2), assemblerNoVersion)
 			require.Equal(t, ops.Program[1:], none.Program[1:])
 			t3 := "// " + t2 // This comments out the #pragma version
-			current := testProg(t, t3, AssemblerMaxVersion)
+			current := testProg(t, obfuscate(t3), AssemblerMaxVersion)
 			require.Equal(t, ops.Program[1:], current.Program[1:])
 		})
 	}
@@ -2164,6 +2164,21 @@ func TestDigAsm(t *testing.T) {
 	testProg(t, "int 1; byte 0x1234; byte 0x1234; dig 2; dig 3; +; pop; +", AssemblerMaxVersion,
 		expect{6, "+ arg 1..."})
 
+}
+
+func TestBlockTypeCheck(t *testing.T) {
+	t.Parallel()
+	for i := uint64(1); i <= AssemblerMaxVersion; i++ {
+		//b introduced in v2
+		if i > 1 {
+			//Check to make sure we don't error since can't know (currently) what comes into block unless first block
+			testProg(t, "b hello; hello:; len", i)
+		}
+		testProg(t, "int 1; bnz hello; int 3; len; hello:; int 2; +", i, expect{4, "len arg 0..."})
+		testProg(t, "int 1; bnz hello; int 4; int 2; +; hello:; int 3; len", i, expect{8, "len arg 0..."})
+		testProg(t, "int 1; len; int 3; bnz hello; int 4; hello:; int 1", i, expect{2, "len arg 0..."})
+		testProg(t, "len", i, expect{1, "len expects..."})
+	}
 }
 
 func TestEqualsTypeCheck(t *testing.T) {

@@ -246,6 +246,25 @@ type OpStream struct {
 	OffsetToLine map[int]int
 
 	HasStatefulOps bool
+
+	// tracks what currBlock needs to have on top of stack
+	currentArgs []StackType
+
+	// tracks sourcelines for currentArgs to be used in error reporting for each block
+	stackSourceLines []int
+
+	//pragma bool whether to disable typechecking or not
+	disableTypeCheck bool
+
+	currBlock basicBlock
+
+	blocks []basicBlock
+
+	// maps startPc of block to index in ops.blocks
+	startPcToBlock map[int]int
+
+	// helper index to create Blocks
+	pcIndex int
 }
 
 // GetVersion returns the LogicSigVersion we're building to
@@ -282,6 +301,8 @@ func (ops *OpStream) ReferToLabel(pc int, label string) {
 }
 
 type opTypeFunc func(ops *OpStream, immediates []string) (StackTypes, StackTypes)
+
+type opJumpFunc func(ops *OpStream)
 
 // returns allows opcodes like `txn` to be specific about their return
 // value types, based on the field requested, rather than use Any as
@@ -1064,6 +1085,34 @@ func asmDefault(ops *OpStream, spec *OpSpec, args []string) error {
 	return nil
 }
 
+func jumpErr(ops *OpStream) {
+	ops.currBlock.jumpTo = erroring
+	ops.currBlock.flowTo = nowhere
+	ops.appendBlock()
+}
+
+func jumpRetSub(ops *OpStream) {
+	ops.currBlock.jumpTo = subRets
+	ops.currBlock.flowTo = nowhere
+	ops.appendBlock()
+}
+
+func jumpReturn(ops *OpStream) {
+	ops.currBlock.jumpTo = exiting
+	ops.currBlock.flowTo = nowhere
+	ops.appendBlock()
+}
+
+//This gets used for callsub for now b/c we're not going through subroutines yet
+func jumpConditionalBranch(ops *OpStream) {
+	ops.currBlock.flowTo = len(ops.blocks) + 1
+	ops.appendBlock()
+}
+
+func jumpUnconditionalBranch(ops *OpStream) {
+	ops.currBlock.flowTo = nowhere
+	ops.appendBlock()
+}
 func typeSwap(ops *OpStream, args []string) (StackTypes, StackTypes) {
 	topTwo := oneAny.plus(oneAny)
 	top := len(ops.typeStack) - 1
@@ -1210,12 +1259,12 @@ func typeUncover(ops *OpStream, args []string) (StackTypes, StackTypes) {
 // keywords handle parsing and assembling special asm language constructs like 'addr'
 // We use OpSpec here, but somewhat degenerate, since they don't have opcodes or eval functions
 var keywords = map[string]OpSpec{
-	"int":  {0, "int", nil, assembleInt, nil, nil, oneInt, 1, modeAny, opDetails{1, 2, nil, nil, nil}},
-	"byte": {0, "byte", nil, assembleByte, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil}},
+	"int":  {0, "int", nil, assembleInt, nil, nil, oneInt, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
+	"byte": {0, "byte", nil, assembleByte, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
 	// parse basics.Address, actually just another []byte constant
-	"addr": {0, "addr", nil, assembleAddr, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil}},
+	"addr": {0, "addr", nil, assembleAddr, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
 	// take a signature, hash it, and take first 4 bytes, actually just another []byte constant
-	"method": {0, "method", nil, assembleMethod, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil}},
+	"method": {0, "method", nil, assembleMethod, nil, nil, oneBytes, 1, modeAny, opDetails{1, 2, nil, nil, nil, nil}},
 }
 
 type lineError struct {
@@ -1327,13 +1376,18 @@ func (ops *OpStream) trace(format string, args ...interface{}) {
 // checks (and pops) arg types from arg type stack
 func (ops *OpStream) checkStack(args StackTypes, returns StackTypes, instruction []string) {
 	argcount := len(args)
-	if argcount > len(ops.typeStack) {
-		err := fmt.Errorf("%s expects %d stack arguments but stack height is %d", strings.Join(instruction, " "), argcount, len(ops.typeStack))
-		if len(ops.labelReferences) > 0 {
-			ops.warnf("%w; but branches have happened and assembler does not precisely track the stack in this case", err)
+	missingArgs := argcount - len(ops.typeStack)
+	if missingArgs > 0 {
+		if len(ops.blocks) > 0 {
+			ops.currentArgs = append(ops.currentArgs, args[:missingArgs]...)
+			for i := 0; i < missingArgs; i++ {
+				ops.stackSourceLines = append(ops.stackSourceLines, ops.sourceLine)
+			}
 		} else {
+			err := fmt.Errorf("%s expects %d stack arguments but stack height is %d", strings.Join(instruction, " "), argcount, len(ops.typeStack))
 			ops.error(err)
 		}
+		ops.typeStack = nil
 	} else {
 		firstPop := true
 		for i := argcount - 1; i >= 0; i-- {
@@ -1347,11 +1401,7 @@ func (ops *OpStream) checkStack(args StackTypes, returns StackTypes, instruction
 			}
 			if !typecheck(argType, stype) {
 				err := fmt.Errorf("%s arg %d wanted type %s got %s", strings.Join(instruction, " "), i, argType.String(), stype.String())
-				if len(ops.labelReferences) > 0 {
-					ops.warnf("%w; but branches have happened and assembler does not precisely track types in this case", err)
-				} else {
-					ops.error(err)
-				}
+				_ = ops.error(err)
 			}
 		}
 		if !firstPop {
@@ -1371,13 +1421,78 @@ func (ops *OpStream) checkStack(args StackTypes, returns StackTypes, instruction
 	}
 }
 
+const (
+	subRets  = -1
+	nowhere  = -2
+	exiting  = -3
+	erroring = -4
+)
+
+//A basicBlock is a structure through which control can only flow in through start and out through end
+type basicBlock struct {
+	startPc         int         //index into ops.pending.Bytes()
+	endPc           int         //Note this is the beginning of the last op in the block, somewhat unnecessary but we'll keep it for now
+	args            []StackType //What the block requires to be on top of the stack in order to complete
+	returns         []StackType //What the block net pushes to the stack
+	linesArgsNeeded []int       //Sourcelines for each entry in Args which is useful for listing sourcelines for errors
+	jumpTo          int         //Index into ops.blocks, where control can jump to out of the block, i.e. via a branch
+	flowTo          int         //Where control can flow to, i.e. the block immediately following a conditional branch
+}
+
+func (ops *OpStream) fixJumpsAndFlows() {
+	refCount := 0
+	for i := range ops.blocks {
+		if len(ops.labelReferences) > refCount && ops.blocks[i].endPc == ops.labelReferences[refCount].position {
+			ops.blocks[i].jumpTo = ops.startPcToBlock[ops.labels[ops.labelReferences[refCount].label]]
+			refCount++
+		}
+		if ops.blocks[i].flowTo > -1 {
+			if i+1 >= len(ops.blocks) {
+				ops.blocks[i].flowTo = exiting
+			} else {
+				ops.blocks[i].flowTo = i + 1
+			}
+		}
+		if ops.blocks[i].jumpTo >= len(ops.blocks) {
+			ops.blocks[i].flowTo = exiting
+		}
+
+	}
+}
+
+func (ops *OpStream) blockLabel() {
+	//If we don't check this we end up creating an extra block after something like "int 1; bz hello; hello:; int 2", though you could argue that example should error
+	if ops.currBlock.startPc != ops.pending.Len() {
+		ops.currBlock.jumpTo = nowhere
+		ops.currBlock.flowTo = len(ops.blocks) + 1
+		ops.appendBlock()
+	}
+}
+
+func (ops *OpStream) appendBlock() {
+	ops.startPcToBlock[ops.currBlock.startPc] = len(ops.blocks)
+	ops.currBlock.args = ops.currentArgs
+	ops.currBlock.returns = ops.typeStack
+	ops.currBlock.endPc = ops.pcIndex
+	ops.currBlock.linesArgsNeeded = ops.stackSourceLines
+	ops.blocks = append(ops.blocks, ops.currBlock)
+	ops.typeStack = nil
+	ops.stackSourceLines = nil
+	ops.currentArgs = nil
+	ops.currBlock = basicBlock{startPc: ops.pending.Len()}
+}
+
 // assemble reads text from an input and accumulates the program
 func (ops *OpStream) assemble(fin io.Reader) error {
 	if ops.Version > LogicVersion && ops.Version != assemblerNoVersion {
 		return ops.errorf("Can not assemble version %d", ops.Version)
 	}
 	scanner := bufio.NewScanner(fin)
+	justAddedBlock := false
+	ops.currBlock = basicBlock{startPc: 0}
+	ops.startPcToBlock = make(map[int]int)
 	ops.sourceLine = 0
+	ops.pcIndex = 0
 	for scanner.Scan() {
 		ops.sourceLine++
 		line := scanner.Text()
@@ -1409,12 +1524,14 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 			ops.createLabel(opstring[:len(opstring)-1])
 			fields = fields[1:]
 			if len(fields) == 0 {
+				ops.blockLabel()
+				justAddedBlock = true
 				// There was a label, not need to ops.trace this
 				continue
 			}
 			opstring = fields[0]
 		}
-
+		ops.pcIndex = ops.pending.Len()
 		spec, ok := OpsByName[ops.Version][opstring]
 		if !ok {
 			spec, ok = keywords[opstring]
@@ -1432,8 +1549,16 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 			if spec.Details.typeFunc != nil {
 				args, returns = spec.Details.typeFunc(ops, fields[1:])
 			}
-			ops.checkStack(args, returns, fields)
+			if !ops.disableTypeCheck {
+				ops.checkStack(args, returns, fields)
+			}
 			spec.asm(ops, &spec, fields[1:])
+			if spec.Details.jumpFunc != nil {
+				spec.Details.jumpFunc(ops)
+				justAddedBlock = true
+			} else {
+				justAddedBlock = false
+			}
 			ops.trace("\n")
 			continue
 		}
@@ -1448,6 +1573,12 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 			ops.errorf("unknown opcode: %s", opstring)
 		}
 	}
+	if !justAddedBlock {
+		ops.currBlock.jumpTo = nowhere
+		ops.currBlock.flowTo = exiting
+		ops.appendBlock()
+	}
+	ops.fixJumpsAndFlows()
 
 	// backward compatibility: do not allow jumps behind last instruction in TEAL v1
 	if ops.Version <= 1 {
@@ -1513,6 +1644,19 @@ func (ops *OpStream) pragma(line string) error {
 			return ops.errorf("version mismatch: assembling v%d with v%d assembler", ver, ops.Version)
 		} else {
 			// ops.Version is already correct, or needed to be upped.
+		}
+		return nil
+	case "disable":
+		if len(fields) < 3 {
+			return ops.error("No disable value(s)")
+		}
+		for i := 2; i < len(fields); i++ {
+			switch fields[i] {
+			case "typecheck":
+				ops.disableTypeCheck = true
+			default:
+				return ops.errorf("No such disable field: %s", fields[i])
+			}
 		}
 		return nil
 	default:
