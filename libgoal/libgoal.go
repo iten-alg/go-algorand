@@ -881,6 +881,16 @@ func (c *Client) GetPendingTransactions(maxTxns uint64) (resp v1.PendingTransact
 	return
 }
 
+// GetPendingTransactionsByAddress gets a snapshot of current pending transactions on the node for the given address.
+// If maxTxns = 0, fetches as many transactions as possible.
+func (c *Client) GetPendingTransactionsByAddress(addr string, maxTxns uint64) (resp v1.PendingTransactions, err error) {
+	algod, err := c.ensureAlgodClient()
+	if err == nil {
+		resp, err = algod.PendingTransactionsByAddr(addr, maxTxns)
+	}
+	return
+}
+
 // ExportKey exports the private key of the passed account, assuming it's available
 func (c *Client) ExportKey(walletHandle []byte, password, account string) (resp kmdapi.APIV1POSTKeyExportResponse, err error) {
 	kmd, err := c.ensureKmdClient()
@@ -1035,7 +1045,7 @@ func MakeDryrunStateGenerated(client Client, txnOrStxn interface{}, other []tran
 				} else {
 					// otherwise need to fetch app state
 					var app generatedV2.Application
-					if app, err = client.ApplicationInformation(uint64(tx.ApplicationID)); err != nil {
+					if app, err = client.ApplicationInformation(uint64(appIdx)); err != nil {
 						return
 					}
 					appParams = app.Params

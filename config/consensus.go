@@ -108,6 +108,11 @@ type ConsensusParams struct {
 	// each Txn has a MinFee.
 	EnableFeePooling bool
 
+	// EnableAppCostPooling specifies that the sum of fees for application calls
+	// in a group is checked against the sum of the budget for application calls,
+	// rather than check each individual app call is within the budget.
+	EnableAppCostPooling bool
+
 	// RewardUnit specifies the number of MicroAlgos corresponding to one reward
 	// unit.
 	//
@@ -422,6 +427,10 @@ var MaxEvalDeltaAccounts int
 // in a StateDelta, used for decoding purposes.
 var MaxStateDeltaKeys int
 
+// MaxLogCalls is the highest allowable log messages that may appear in
+// any version, used only for decoding purposes. Never decrease this value.
+var MaxLogCalls int
+
 // MaxLogicSigMaxSize is the largest logical signature appear in any of the supported
 // protocols, used for decoding purposes.
 var MaxLogicSigMaxSize int
@@ -482,6 +491,9 @@ func checkSetAllocBounds(p ConsensusParams) {
 	checkSetMax(p.MaxExtraAppProgramPages, &MaxExtraAppProgramLen)
 	// MaxAvailableAppProgramLen is the max of supported app program size
 	MaxAvailableAppProgramLen = MaxAppProgramLen * (1 + MaxExtraAppProgramLen)
+	// There is no consensus parameter for MaxLogCalls and MaxAppProgramLen as an approximation
+	// Its value is much larger than any possible reasonable MaxLogCalls value in future
+	checkSetMax(p.MaxAppProgramLen, &MaxLogCalls)
 }
 
 // SaveConfigurableConsensus saves the configurable protocols file to the provided data directory.
@@ -1000,6 +1012,9 @@ func initConsensusProtocols() {
 
 	// Enable TEAL 5 / AVM 1.0
 	vFuture.LogicSigVersion = 5
+
+	// Enable App calls to pool budget in grouped transactions
+	vFuture.EnableAppCostPooling = true
 
 	Consensus[protocol.ConsensusFuture] = vFuture
 }

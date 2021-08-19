@@ -95,11 +95,6 @@ func stacky(typer opTypeFunc, imms ...string) opDetails {
 	return d
 }
 
-func jumpy(jumper opJumpFunc, d opDetails) opDetails {
-	d.jumpFunc = jumper
-	return d
-}
-
 func setStage(actor opActionFunc, d opDetails) opDetails {
 	d.actFunc = actor
 	return d
@@ -160,7 +155,7 @@ var anyIntInt = StackTypes{StackAny, StackUint64, StackUint64}
 // Note: assembly can specialize an Any return type if known at
 // assembly-time, with ops.returns()
 var OpSpecs = []OpSpec{
-	{0x00, "err", opErr, asmDefault, disDefault, nil, nil, 1, modeAny, jumpy(jumpErr, opDefault)},
+	{0x00, "err", opErr, asmDefault, disDefault, nil, nil, 1, modeAny, opDefault},
 	{0x01, "sha256", opSHA256, asmDefault, disDefault, oneBytes, oneBytes, 1, modeAny, costly(7)},
 	{0x02, "keccak256", opKeccak256, asmDefault, disDefault, oneBytes, oneBytes, 1, modeAny, costly(26)},
 	{0x03, "sha512_256", opSHA512_256, asmDefault, disDefault, oneBytes, oneBytes, 1, modeAny, costly(9)},
@@ -174,18 +169,19 @@ var OpSpecs = []OpSpec{
 	{0x03, "sha512_256", opSHA512_256, asmDefault, disDefault, oneBytes, oneBytes, 2, modeAny, costly(45)},
 
 	{0x04, "ed25519verify", opEd25519verify, asmDefault, disDefault, threeBytes, oneInt, 1, runModeSignature, costly(1900)},
-	{0x08, "+", opPlus, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
+	{0x04, "ed25519verify", opEd25519verify, asmDefault, disDefault, threeBytes, oneInt, 5, modeAny, costly(1900)},
+	{0x08, "+", opPlus, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
 	{0x09, "-", opMinus, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
 	{0x0a, "/", opDiv, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
 	{0x0b, "*", opMul, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
-	{0x0c, "<", opLt, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x0d, ">", opGt, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x0e, "<=", opLe, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x0f, ">=", opGe, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x10, "&&", opAnd, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x11, "||", opOr, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x12, "==", opEq, asmDefault, disDefault, twoAny, oneInt, 1, modeAny, setStage(actEquals, stacky(typeEquals))},
-	{0x13, "!=", opNeq, asmDefault, disDefault, twoAny, oneInt, 1, modeAny, setStage(actNotEquals, stacky(typeEquals))},
+	{0x0c, "<", opLt, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x0d, ">", opGt, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x0e, "<=", opLe, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x0f, ">=", opGe, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x10, "&&", opAnd, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x11, "||", opOr, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x12, "==", opEq, asmDefault, disDefault, twoAny, oneInt, 1, modeAny, stacky(typeEquals)},
+	{0x13, "!=", opNeq, asmDefault, disDefault, twoAny, oneInt, 1, modeAny, stacky(typeEquals)},
 	{0x14, "!", opNot, asmDefault, disDefault, oneInt, oneInt, 1, modeAny, opDefault},
 	{0x15, "len", opLen, asmDefault, disDefault, oneBytes, oneInt, 1, modeAny, opDefault},
 	{0x16, "itob", opItob, asmDefault, disDefault, oneInt, oneBytes, 1, modeAny, opDefault},
@@ -238,18 +234,16 @@ var OpSpecs = []OpSpec{
 	{0x3c, "gaid", opGaid, asmDefault, disDefault, nil, oneInt, 4, runModeApplication, immediates("t")},
 	{0x3d, "gaids", opGaids, asmDefault, disDefault, oneInt, oneInt, 4, runModeApplication, opDefault},
 
-	{0x40, "bnz", opBnz, assembleBranch, disBranch, oneInt, nil, 1, modeAny, setStage(actBNZ, jumpy(jumpConditionalBranch, opBranch))},
-	{0x41, "bz", opBz, assembleBranch, disBranch, oneInt, nil, 2, modeAny, setStage(actBZ, jumpy(jumpConditionalBranch, opBranch))},
-	{0x42, "b", opB, assembleBranch, disBranch, nil, nil, 2, modeAny, jumpy(jumpUnconditionalBranch, opBranch)},
-	{0x43, "return", opReturn, asmDefault, disDefault, oneInt, nil, 2, modeAny, jumpy(jumpReturn, opDefault)},
-	{0x44, "assert", opAssert, asmDefault, disDefault, oneInt, nil, 3, modeAny, setStage(actAssert, opDefault)},
+	{0x40, "bnz", opBnz, assembleBranch, disBranch, oneInt, nil, 1, modeAny, opBranch},
+	{0x41, "bz", opBz, assembleBranch, disBranch, oneInt, nil, 2, modeAny, opBranch},
+	{0x42, "b", opB, assembleBranch, disBranch, nil, nil, 2, modeAny, opBranch},
+	{0x43, "return", opReturn, asmDefault, disDefault, oneInt, nil, 2, modeAny, opDefault},
+	{0x44, "assert", opAssert, asmDefault, disDefault, oneInt, nil, 3, modeAny, opDefault},
 	{0x48, "pop", opPop, asmDefault, disDefault, oneAny, nil, 1, modeAny, opDefault},
-	{0x49, "dup", opDup, asmDefault, disDefault, oneAny, twoAny, 1, modeAny, setStage(actDup, stacky(typeDup))},
-	{0x4a, "dup2", opDup2, asmDefault, disDefault, twoAny, twoAny.plus(twoAny), 2, modeAny, setStage(actDupTwo, stacky(typeDupTwo))},
-	// There must be at least one thing on the stack for dig, but
-	// it would be nice if we did better checking than that.
-	{0x4b, "dig", opDig, asmDefault, disDefault, oneAny, twoAny, 3, modeAny, setStage(actDig, stacky(typeDig, "n"))},
-	{0x4c, "swap", opSwap, asmDefault, disDefault, twoAny, twoAny, 3, modeAny, setStage(actSwap, stacky(typeSwap))},
+	{0x49, "dup", opDup, asmDefault, disDefault, oneAny, twoAny, 1, modeAny, stacky(typeDup)},
+	{0x4a, "dup2", opDup2, asmDefault, disDefault, twoAny, twoAny.plus(twoAny), 2, modeAny, stacky(typeDupTwo)},
+	{0x4b, "dig", opDig, asmDefault, disDefault, oneAny, twoAny, 3, modeAny, stacky(typeDig, "n")},
+	{0x4c, "swap", opSwap, asmDefault, disDefault, twoAny, twoAny, 3, modeAny, stacky(typeSwap)},
 	{0x4d, "select", opSelect, asmDefault, disDefault, twoAny.plus(oneInt), oneAny, 3, modeAny, stacky(typeSelect)},
 	{0x4e, "cover", opCover, asmDefault, disDefault, oneAny, oneAny, 5, modeAny, stacky(typeCover, "n")},
 	{0x4f, "uncover", opUncover, asmDefault, disDefault, oneAny, oneAny, 5, modeAny, stacky(typeUncover, "n")},
@@ -297,8 +291,8 @@ var OpSpecs = []OpSpec{
 	{0x81, "pushint", opPushInt, asmPushInt, disPushInt, nil, oneInt, 3, modeAny, setStage(actInt, varies(checkPushInt, "uint", immInt))},
 
 	// "Function oriented"
-	{0x88, "callsub", opCallSub, assembleBranch, disBranch, nil, nil, 4, modeAny, jumpy(jumpCallSub, opBranch)},
-	{0x89, "retsub", opRetSub, asmDefault, disDefault, nil, nil, 4, modeAny, jumpy(jumpRetSub, opDefault)},
+	{0x88, "callsub", opCallSub, assembleBranch, disBranch, nil, nil, 4, modeAny, opBranch},
+	{0x89, "retsub", opRetSub, asmDefault, disDefault, nil, nil, 4, modeAny, opDefault},
 	// Leave a little room for indirect function calls, or similar
 
 	// More math
@@ -326,6 +320,9 @@ var OpSpecs = []OpSpec{
 	{0xad, "b^", opBytesBitXor, asmDefault, disDefault, twoBytes, oneBytes, 4, modeAny, costly(6)},
 	{0xae, "b~", opBytesBitNot, asmDefault, disDefault, oneBytes, oneBytes, 4, modeAny, costly(4)},
 	{0xaf, "bzero", opBytesZero, asmDefault, disDefault, oneInt, oneBytes, 4, modeAny, opDefault},
+
+	// ABI support opcodes.
+	{0xb0, "log", opLog, asmDefault, disDefault, oneBytes, nil, 5, runModeApplication, opDefault},
 }
 
 type sortByOpcode []OpSpec
@@ -386,6 +383,26 @@ var opsByOpcode [LogicVersion + 1][256]OpSpec
 // OpsByName map for each each version, mapping opcode name to OpSpec
 var OpsByName [LogicVersion + 1]map[string]OpSpec
 
+// Now that opDetails has this additional component, jumpFunc, we need to go through and add them to the specs in init
+func addJumpFuncs() {
+	for i := range OpSpecs {
+		switch OpSpecs[i].Name {
+		case "err":
+			OpSpecs[i].Details.jumpFunc = jumpErr
+		case "bnz", "bz":
+			OpSpecs[i].Details.jumpFunc = jumpConditionalBranch
+		case "b":
+			OpSpecs[i].Details.jumpFunc = jumpUnconditionalBranch
+		case "return":
+			OpSpecs[i].Details.jumpFunc = jumpReturn
+		case "callsub":
+			OpSpecs[i].Details.jumpFunc = jumpConditionalBranch
+		case "retsub":
+			OpSpecs[i].Details.jumpFunc = jumpRetSub
+		}
+	}
+}
+
 // Migration from TEAL v1 to TEAL v2.
 // TEAL v1 allowed execution of program with version 0.
 // With TEAL v2 opcode versions are introduced and they are bound to every opcode.
@@ -393,6 +410,7 @@ var OpsByName [LogicVersion + 1]map[string]OpSpec
 // To preserve backward compatibility version 0 array is populated with TEAL v1 opcodes
 // with the version overwritten to 0.
 func init() {
+	addJumpFuncs()
 	// First, initialize baseline v1 opcodes.
 	// Zero (empty) version is an alias for TEAL v1 opcodes and needed for compatibility with v1 code.
 	OpsByName[0] = make(map[string]OpSpec, 256)

@@ -256,9 +256,9 @@ type OpStream struct {
 	//pragma bool whether to disable typechecking or not
 	disableTypeCheck bool
 
-	currBlock BasicBlock
+	currBlock basicBlock
 
-	blocks []BasicBlock
+	blocks []basicBlock
 
 	// maps startPc of block to index in ops.blocks
 	startPcToBlock map[int]int
@@ -1821,7 +1821,7 @@ func (ops *OpStream) checkStack(args StackTypes, returns StackTypes, instruction
 			}
 			if !typecheck(argType, stype) {
 				err := fmt.Errorf("%s arg %d wanted type %s got %s", strings.Join(instruction, " "), i, argType.String(), stype.String())
-				ops.error(err)
+				_ = ops.error(err)
 			}
 		}
 		if !firstPop {
@@ -1841,10 +1841,12 @@ func (ops *OpStream) checkStack(args StackTypes, returns StackTypes, instruction
 	}
 }
 
-const subRets int = -1
-const nowhere int = -2
-const exiting int = -3
-const erroring int = -4
+const (
+	subRets  = -1
+	nowhere  = -2
+	exiting  = -3
+	erroring = -4
+)
 
 type StackKnowledge struct {
 	valUint  uint64
@@ -1852,26 +1854,28 @@ type StackKnowledge struct {
 	valKnown bool
 }
 
-//A BasicBlock is a structure through which control can only flow in through start and out through end
-type BasicBlock struct {
-	startPc          int                //index into ops.pending.Bytes()
-	endPc            int                //Note this is the beginning of the last op in the block, somewhat unnecessary but we'll keep it for now
-	Args             []StackType        //What the block requires to be on top of the stack in order to complete
-	Returns          []StackType        //What the block net pushes to the stack
-	sourceErrors     []int              //Sourcelines for each entry in Args which is useful for listing sourcelines for errors
-	jumpTo           int                //Index into ops.blocks, where control can jump to out of the block, i.e. via a branch
-	flowTo           int                //Where control can flow to, i.e. the block immediately following a conditional branch
+const (
+	blockDefualt = 0x0
+	err = 0x1
+	jump = 0x2
+	flow = 0x3
+)
+
+//A basicBlock is a structure through which control can only flow in through start and out through end
+type basicBlock struct {
+	startPc         int         //index into ops.pending.Bytes()
+	endPc           int         //Note this is the beginning of the last op in the block, somewhat unnecessary but we'll keep it for now
+	args            []StackType //What the block requires to be on top of the stack in order to complete
+	returns         []StackType //What the block net pushes to the stack
+	linesArgsNeeded []int       //Sourcelines for each entry in Args which is useful for listing sourcelines for errors
+	jumpTo          int         //Index into ops.blocks, where control can jump to out of the block, i.e. via a branch
+	flowTo          int         //Where control can flow to, i.e. the block immediately following a conditional branch
 	valStacks        [][]StackKnowledge //Keeps track of the different valStacks (we need one for each different scenario we run)
 	jumpInstructions []byte
 	callStacks       [][]int
 	callSubs         bool
 	visited          []visit
 }
-
-const blockDefault byte = 0x0
-const err byte = 0x1
-const jump byte = 0x2
-const flow byte = 0x3
 
 func (ops *OpStream) fixJumpsAndFlows() {
 	refCount := 0
@@ -1881,8 +1885,16 @@ func (ops *OpStream) fixJumpsAndFlows() {
 			refCount++
 		}
 		if ops.blocks[i].flowTo > -1 {
-			ops.blocks[i].flowTo = i + 1
+			if i+1 >= len(ops.blocks) {
+				ops.blocks[i].flowTo = exiting
+			} else {
+				ops.blocks[i].flowTo = i + 1
+			}
 		}
+		if ops.blocks[i].jumpTo >= len(ops.blocks) {
+			ops.blocks[i].flowTo = exiting
+		}
+
 	}
 }
 
@@ -1897,15 +1909,15 @@ func (ops *OpStream) blockLabel() {
 
 func (ops *OpStream) appendBlock() {
 	ops.startPcToBlock[ops.currBlock.startPc] = len(ops.blocks)
-	ops.currBlock.Args = ops.currentArgs
-	ops.currBlock.Returns = ops.typeStack
+	ops.currBlock.args = ops.currentArgs
+	ops.currBlock.returns = ops.typeStack
 	ops.currBlock.endPc = ops.pcIndex
-	ops.currBlock.sourceErrors = ops.stackSourceLines
+	ops.currBlock.linesArgsNeeded = ops.stackSourceLines
 	ops.blocks = append(ops.blocks, ops.currBlock)
 	ops.typeStack = nil
 	ops.stackSourceLines = nil
 	ops.currentArgs = nil
-	ops.currBlock = BasicBlock{startPc: ops.pending.Len()}
+	ops.currBlock = basicBlock{startPc: ops.pending.Len()}
 }
 
 func doActFunc(ops *OpStream, spec *OpSpec, immediates []string, args, returns StackTypes) {
@@ -2005,7 +2017,7 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 	}
 	scanner := bufio.NewScanner(fin)
 	justAddedBlock := false
-	ops.currBlock = BasicBlock{startPc: 0}
+	ops.currBlock = basicBlock{startPc: 0}
 	ops.startPcToBlock = make(map[int]int)
 	ops.sourceLine = 0
 	ops.pcIndex = 0
