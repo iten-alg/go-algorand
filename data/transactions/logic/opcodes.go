@@ -95,11 +95,6 @@ func stacky(typer opTypeFunc, imms ...string) opDetails {
 	return d
 }
 
-func setStage(actor opActionFunc, d opDetails) opDetails {
-	d.actFunc = actor
-	return d
-}
-
 func varies(checker opCheckFunc, name string, kind immKind) opDetails {
 	return opDetails{1, 0, checker, []immediate{{name, kind}}, nil, nil, nil}
 }
@@ -186,38 +181,38 @@ var OpSpecs = []OpSpec{
 	{0x15, "len", opLen, asmDefault, disDefault, oneBytes, oneInt, 1, modeAny, opDefault},
 	{0x16, "itob", opItob, asmDefault, disDefault, oneInt, oneBytes, 1, modeAny, opDefault},
 	{0x17, "btoi", opBtoi, asmDefault, disDefault, oneBytes, oneInt, 1, modeAny, opDefault},
-	{0x18, "%", opModulo, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x19, "|", opBitOr, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x1a, "&", opBitAnd, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x1b, "^", opBitXor, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
+	{0x18, "%", opModulo, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x19, "|", opBitOr, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x1a, "&", opBitAnd, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
+	{0x1b, "^", opBitXor, asmDefault, disDefault, twoInts, oneInt, 1, modeAny, opDefault},
 	{0x1c, "~", opBitNot, asmDefault, disDefault, oneInt, oneInt, 1, modeAny, opDefault},
 	{0x1d, "mulw", opMulw, asmDefault, disDefault, twoInts, twoInts, 1, modeAny, opDefault},
 	{0x1e, "addw", opAddw, asmDefault, disDefault, twoInts, twoInts, 2, modeAny, opDefault},
 	{0x1f, "divmodw", opDivModw, asmDefault, disDefault, twoInts.plus(twoInts), twoInts.plus(twoInts), 4, modeAny, costly(20)},
 
-	{0x20, "intcblock", opIntConstBlock, assembleIntCBlock, disIntcblock, nil, nil, 1, modeAny, setStage(actIntcBlock, varies(checkIntConstBlock, "uint ...", immInts))},
-	{0x21, "intc", opIntConstLoad, assembleIntC, disIntc, nil, oneInt, 1, modeAny, setStage(actIntc, immediates("i"))},
-	{0x22, "intc_0", opIntConst0, asmDefault, disIntc, nil, oneInt, 1, modeAny, setStage(actQuickIntc, opDefault)},
-	{0x23, "intc_1", opIntConst1, asmDefault, disIntc, nil, oneInt, 1, modeAny, setStage(actQuickIntc, opDefault)},
-	{0x24, "intc_2", opIntConst2, asmDefault, disIntc, nil, oneInt, 1, modeAny, setStage(actQuickIntc, opDefault)},
-	{0x25, "intc_3", opIntConst3, asmDefault, disIntc, nil, oneInt, 1, modeAny, setStage(actQuickIntc, opDefault)},
-	{0x26, "bytecblock", opByteConstBlock, assembleByteCBlock, disBytecblock, nil, nil, 1, modeAny, setStage(actBytecBlock, varies(checkByteConstBlock, "bytes ...", immBytess))},
-	{0x27, "bytec", opByteConstLoad, assembleByteC, disBytec, nil, oneBytes, 1, modeAny, setStage(actBytec, immediates("i"))},
-	{0x28, "bytec_0", opByteConst0, asmDefault, disBytec, nil, oneBytes, 1, modeAny, setStage(actQuickBytec, opDefault)},
-	{0x29, "bytec_1", opByteConst1, asmDefault, disBytec, nil, oneBytes, 1, modeAny, setStage(actQuickBytec, opDefault)},
-	{0x2a, "bytec_2", opByteConst2, asmDefault, disBytec, nil, oneBytes, 1, modeAny, setStage(actQuickBytec, opDefault)},
-	{0x2b, "bytec_3", opByteConst3, asmDefault, disBytec, nil, oneBytes, 1, modeAny, setStage(actQuickBytec, opDefault)},
+	{0x20, "intcblock", opIntConstBlock, assembleIntCBlock, disIntcblock, nil, nil, 1, modeAny, varies(checkIntConstBlock, "uint ...", immInts)},
+	{0x21, "intc", opIntConstLoad, assembleIntC, disIntc, nil, oneInt, 1, modeAny, immediates("i")},
+	{0x22, "intc_0", opIntConst0, asmDefault, disIntc, nil, oneInt, 1, modeAny, opDefault},
+	{0x23, "intc_1", opIntConst1, asmDefault, disIntc, nil, oneInt, 1, modeAny, opDefault},
+	{0x24, "intc_2", opIntConst2, asmDefault, disIntc, nil, oneInt, 1, modeAny, opDefault},
+	{0x25, "intc_3", opIntConst3, asmDefault, disIntc, nil, oneInt, 1, modeAny, opDefault},
+	{0x26, "bytecblock", opByteConstBlock, assembleByteCBlock, disBytecblock, nil, nil, 1, modeAny, varies(checkByteConstBlock, "bytes ...", immBytess)},
+	{0x27, "bytec", opByteConstLoad, assembleByteC, disBytec, nil, oneBytes, 1, modeAny, immediates("i")},
+	{0x28, "bytec_0", opByteConst0, asmDefault, disBytec, nil, oneBytes, 1, modeAny, opDefault},
+	{0x29, "bytec_1", opByteConst1, asmDefault, disBytec, nil, oneBytes, 1, modeAny, opDefault},
+	{0x2a, "bytec_2", opByteConst2, asmDefault, disBytec, nil, oneBytes, 1, modeAny, opDefault},
+	{0x2b, "bytec_3", opByteConst3, asmDefault, disBytec, nil, oneBytes, 1, modeAny, opDefault},
 	{0x2c, "arg", opArg, assembleArg, disDefault, nil, oneBytes, 1, runModeSignature, immediates("n")},
 	{0x2d, "arg_0", opArg0, asmDefault, disDefault, nil, oneBytes, 1, runModeSignature, opDefault},
 	{0x2e, "arg_1", opArg1, asmDefault, disDefault, nil, oneBytes, 1, runModeSignature, opDefault},
 	{0x2f, "arg_2", opArg2, asmDefault, disDefault, nil, oneBytes, 1, runModeSignature, opDefault},
 	{0x30, "arg_3", opArg3, asmDefault, disDefault, nil, oneBytes, 1, runModeSignature, opDefault},
-	{0x31, "txn", opTxn, assembleTxn, disTxn, nil, oneAny, 1, modeAny, setStage(actTxn, immediates("f"))},
+	{0x31, "txn", opTxn, assembleTxn, disTxn, nil, oneAny, 1, modeAny, immediates("f")},
 	// It is ok to have the same opcode for different TEAL versions.
 	// This 'txn' asm command supports additional argument in version 2 and
 	// generates 'txna' opcode in that particular case
-	{0x31, "txn", opTxn, assembleTxn2, disTxn, nil, oneAny, 2, modeAny, setStage(actTxn, immediates("f"))},
-	{0x32, "global", opGlobal, assembleGlobal, disGlobal, nil, oneAny, 1, modeAny, setStage(actGlobal, immediates("f"))},
+	{0x31, "txn", opTxn, assembleTxn2, disTxn, nil, oneAny, 2, modeAny, immediates("f")},
+	{0x32, "global", opGlobal, assembleGlobal, disGlobal, nil, oneAny, 1, modeAny, immediates("f")},
 	{0x33, "gtxn", opGtxn, assembleGtxn, disGtxn, nil, oneAny, 1, modeAny, immediates("t", "f")},
 	{0x33, "gtxn", opGtxn, assembleGtxn2, disGtxn, nil, oneAny, 2, modeAny, immediates("t", "f")},
 	{0x34, "load", opLoad, asmDefault, disDefault, nil, oneAny, 1, modeAny, immediates("i")},
@@ -287,8 +282,8 @@ var OpSpecs = []OpSpec{
 	{0x78, "min_balance", opMinBalance, asmDefault, disDefault, oneAny, oneInt, directRefEnabledVersion, runModeApplication, opDefault},
 
 	// Immediate bytes and ints. Smaller code size for single use of constant.
-	{0x80, "pushbytes", opPushBytes, asmPushBytes, disPushBytes, nil, oneBytes, 3, modeAny, setStage(actBytes, varies(checkPushBytes, "bytes", immBytes))},
-	{0x81, "pushint", opPushInt, asmPushInt, disPushInt, nil, oneInt, 3, modeAny, setStage(actInt, varies(checkPushInt, "uint", immInt))},
+	{0x80, "pushbytes", opPushBytes, asmPushBytes, disPushBytes, nil, oneBytes, 3, modeAny, varies(checkPushBytes, "bytes", immBytes)},
+	{0x81, "pushint", opPushInt, asmPushInt, disPushInt, nil, oneInt, 3, modeAny, varies(checkPushInt, "uint", immInt)},
 
 	// "Function oriented"
 	{0x88, "callsub", opCallSub, assembleBranch, disBranch, nil, nil, 4, modeAny, opBranch},
@@ -296,8 +291,8 @@ var OpSpecs = []OpSpec{
 	// Leave a little room for indirect function calls, or similar
 
 	// More math
-	{0x90, "shl", opShiftLeft, asmDefault, disDefault, twoInts, oneInt, 4, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
-	{0x91, "shr", opShiftRight, asmDefault, disDefault, twoInts, oneInt, 4, modeAny, setStage(actTwoIntsOneRetInt, opDefault)},
+	{0x90, "shl", opShiftLeft, asmDefault, disDefault, twoInts, oneInt, 4, modeAny, opDefault},
+	{0x91, "shr", opShiftRight, asmDefault, disDefault, twoInts, oneInt, 4, modeAny, opDefault},
 	{0x92, "sqrt", opSqrt, asmDefault, disDefault, oneInt, oneInt, 4, modeAny, costly(4)},
 	{0x93, "bitlen", opBitLen, asmDefault, disDefault, oneAny, oneInt, 4, modeAny, opDefault},
 	{0x94, "exp", opExp, asmDefault, disDefault, twoInts, oneInt, 4, modeAny, opDefault},
@@ -403,6 +398,65 @@ func addJumpFuncs() {
 	}
 }
 
+func addActFuncs() {
+	for i := range OpSpecs {
+		switch OpSpecs[i].Name {
+		case "<", "<=", ">", ">=", "||", "&&", "+", "-", "*", "/", "%", "|", "&", "^", "shl", "shr":
+			OpSpecs[i].Details.actFunc = actTwoIntsOneRetInt
+		case "==":
+			OpSpecs[i].Details.actFunc = actEquals
+		case "!=":
+			OpSpecs[i].Details.actFunc = actNotEquals
+		case "bnz":
+			OpSpecs[i].Details.actFunc = actBNZ
+		case "bz":
+			OpSpecs[i].Details.actFunc = actBZ
+		case "assert":
+			OpSpecs[i].Details.actFunc = actAssert
+		case "dup":
+			OpSpecs[i].Details.actFunc = actDup
+		case "dup2":
+			OpSpecs[i].Details.actFunc = actDupTwo
+		case "swap":
+			OpSpecs[i].Details.actFunc = actSwap
+		case "dig":
+			OpSpecs[i].Details.actFunc = actDig
+		case "pushint":
+			OpSpecs[i].Details.actFunc = actInt
+		case "intcblock":
+			OpSpecs[i].Details.actFunc = actIntcBlock
+		case "intc":
+			OpSpecs[i].Details.actFunc = actIntc
+		case "intc_0":
+			OpSpecs[i].Details.actFunc = actQuickIntc
+		case "intc_1":
+			OpSpecs[i].Details.actFunc = actQuickIntc
+		case "intc_2":
+			OpSpecs[i].Details.actFunc = actQuickIntc
+		case "intc_3":
+			OpSpecs[i].Details.actFunc = actQuickIntc
+		case "pushbytes":
+			OpSpecs[i].Details.actFunc = actBytes
+		case "bytecblock":
+			OpSpecs[i].Details.actFunc = actBytecBlock
+		case "bytec":
+			OpSpecs[i].Details.actFunc = actBytec
+		case "bytec_0":
+			OpSpecs[i].Details.actFunc = actQuickBytec
+		case "bytec_1":
+			OpSpecs[i].Details.actFunc = actQuickBytec
+		case "bytec_2":
+			OpSpecs[i].Details.actFunc = actQuickBytec
+		case "bytec_3":
+			OpSpecs[i].Details.actFunc = actQuickBytec
+		case "global":
+			OpSpecs[i].Details.actFunc = actGlobal
+		case "txn":
+			OpSpecs[i].Details.actFunc = actTxn
+		}
+	}
+}
+
 // Migration from TEAL v1 to TEAL v2.
 // TEAL v1 allowed execution of program with version 0.
 // With TEAL v2 opcode versions are introduced and they are bound to every opcode.
@@ -411,6 +465,7 @@ func addJumpFuncs() {
 // with the version overwritten to 0.
 func init() {
 	addJumpFuncs()
+	addActFuncs()
 	// First, initialize baseline v1 opcodes.
 	// Zero (empty) version is an alias for TEAL v1 opcodes and needed for compatibility with v1 code.
 	OpsByName[0] = make(map[string]OpSpec, 256)
