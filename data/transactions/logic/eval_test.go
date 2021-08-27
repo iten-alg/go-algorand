@@ -4227,6 +4227,17 @@ func obfuscate(program string) string {
 	return "#pragma disable typecheck;" + program
 }
 
+func obfuscate_bugCheck(program string) string {
+	// Put a prefix on the program that does nothing interesting,
+	// but prevents assembly from detecting type errors.  Allows
+	// evaluation testing of a program that would be rejected by
+	// assembler.
+	if strings.Contains(program, "#pragma disable bugCheck") {
+		return program // Already done.  Tests sometimes use at multiple levels
+	}
+	return "#pragma disable bugCheck;" + program
+}
+
 type evalTester func(pass bool, err error) bool
 
 func testEvaluation(t *testing.T, program string, introduced uint64, tester evalTester) error {
