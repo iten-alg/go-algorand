@@ -4227,7 +4227,7 @@ func obfuscate(program string) string {
 	return "#pragma disable typecheck;" + program
 }
 
-func obfuscate_bugCheck(program string) string {
+func obfuscateBugCheck(program string) string {
 	// Put a prefix on the program that does nothing interesting,
 	// but prevents assembly from detecting type errors.  Allows
 	// evaluation testing of a program that would be rejected by

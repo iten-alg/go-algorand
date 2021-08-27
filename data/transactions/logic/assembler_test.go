@@ -421,7 +421,7 @@ func testMatch(t testing.TB, actual, expected string) {
 
 func testProg(t testing.TB, source string, ver uint64, expected ...expect) *OpStream {
 	t.Helper()
-	source = obfuscate_bugCheck(source)
+	source = obfuscateBugCheck(source)
 	program := strings.ReplaceAll(source, ";", "\n")
 	ops, err := AssembleStringWithVersion(program, ver)
 	if len(expected) == 0 {

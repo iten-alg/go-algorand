@@ -316,7 +316,7 @@ type opTypeFunc func(ops *OpStream, immediates []string) (StackTypes, StackTypes
 
 type opJumpFunc func(ops *OpStream)
 
-type opActionFunc func(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge
+type opActionFunc func(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge
 
 // returns allows opcodes like `txn` to be specific about their return
 // value types, based on the field requested, rather than use Any as
@@ -1288,16 +1288,16 @@ func ffBytes() []byte {
 	return address
 }
 
-func unknownKnowledge() []StackKnowledge {
-	return []StackKnowledge{{valKnown: false}}
+func unknownKnowledge() []stackKnowledge {
+	return []stackKnowledge{{valKnown: false}}
 }
 
-func oneUintK(val uint64) []StackKnowledge {
-	return []StackKnowledge{{valKnown: true, valUint: val}}
+func oneUintK(val uint64) []stackKnowledge {
+	return []stackKnowledge{{valKnown: true, valUint: val}}
 }
 
-func oneBytesK(val []byte) []StackKnowledge {
-	return []StackKnowledge{{valKnown: true, valBytes: val}}
+func oneBytesK(val []byte) []stackKnowledge {
+	return []stackKnowledge{{valKnown: true, valBytes: val}}
 }
 
 type bugCheck int
@@ -1314,7 +1314,7 @@ const (
 
 const highFee uint64 = 2000000
 
-func actEquals(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actEquals(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length < 2 {
 		return unknownKnowledge()
@@ -1343,7 +1343,7 @@ func actEquals(ops *OpStream, spec *OpSpec, immediates []string, bugType bugChec
 	}
 }
 
-func actNotEquals(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actNotEquals(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	equals := actEquals(ops, spec, immediates, bugType, typeStackTop)
 	if equals[0].valKnown {
 		if equals[0].valUint == 1 {
@@ -1354,8 +1354,8 @@ func actNotEquals(ops *OpStream, spec *OpSpec, immediates []string, bugType bugC
 	return unknownKnowledge()
 }
 
-func actDup(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
-	rets := make([]StackKnowledge, 2)
+func actDup(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
+	rets := make([]stackKnowledge, 2)
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length > 0 {
 		rets[0] = ops.currBlock.knowledgeStacks[bugType][length-1]
@@ -1364,8 +1364,8 @@ func actDup(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, 
 	return rets
 }
 
-func actDupTwo(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
-	topTwo := make([]StackKnowledge, 2)
+func actDupTwo(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
+	topTwo := make([]stackKnowledge, 2)
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length > 0 {
 		topTwo[1] = ops.currBlock.knowledgeStacks[bugType][length-1]
@@ -1376,7 +1376,7 @@ func actDupTwo(ops *OpStream, spec *OpSpec, immediates []string, bugType bugChec
 	return append(topTwo, topTwo...)
 }
 
-func actSwap(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actSwap(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	returns := actDupTwo(ops, spec, immediates, bugType, typeStackTop)[0:2]
 	saved := returns[0]
 	returns[0] = returns[1]
@@ -1384,7 +1384,7 @@ func actSwap(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck,
 	return returns
 }
 
-func actDig(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actDig(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	if len(immediates) == 0 {
 		// typeDig makes return
 		return unknownKnowledge()
@@ -1394,7 +1394,7 @@ func actDig(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, 
 		return unknownKnowledge()
 	}
 	depth := int(n) + 1
-	returns := make([]StackKnowledge, depth+1)
+	returns := make([]stackKnowledge, depth+1)
 	idx := len(ops.currBlock.knowledgeStacks[bugType]) - depth
 	if idx >= 0 {
 		returns[len(returns)-1] = ops.currBlock.knowledgeStacks[bugType][idx]
@@ -1406,7 +1406,7 @@ func actDig(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, 
 }
 
 // pushint does not allow enums during assembly, but I'm going to use this for both int and pushint in case that ever changes
-func actInt(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actInt(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	val, got := txnTypeConstToUint64[immediates[0]]
 	if !got {
 		val, got = txnTypeIndexes[immediates[0]]
@@ -1420,7 +1420,7 @@ func actInt(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, 
 	return oneUintK(val)
 }
 
-func actIntcBlock(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actIntcBlock(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	if bugType == bugCheck(0) {
 		// Don't want to increment for every bugCheck
 		ops.intcBlockCount++
@@ -1428,7 +1428,7 @@ func actIntcBlock(ops *OpStream, spec *OpSpec, immediates []string, bugType bugC
 	return nil
 }
 
-func actIntc(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actIntc(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	ops.currBlock.accessedIntc = true
 	constIndex, _ := strconv.ParseUint(immediates[0], 0, 64)
 	//this should never happen since it should error but I'll check anyways
@@ -1439,7 +1439,7 @@ func actIntc(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck,
 	return oneUintK(ops.intc[constIndex])
 }
 
-func actQuickIntc(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actQuickIntc(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	//This func is for the intc_* ops
 	ops.currBlock.accessedIntc = true
 	if ops.intcBlockCount != 1 {
@@ -1454,17 +1454,17 @@ func actQuickIntc(ops *OpStream, spec *OpSpec, immediates []string, bugType bugC
 	return oneUintK(ops.intc[constIndex])
 }
 
-func actBytes(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actBytes(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	val, _, _ := parseBinaryArgs(immediates)
 	return oneBytesK(val)
 }
 
-func actAddr(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actAddr(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	val, _ := basics.UnmarshalChecksumAddress(immediates[0])
 	return oneBytesK(val[:])
 }
 
-func actGlobal(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actGlobal(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	fs, _ := globalFieldSpecByName[immediates[0]]
 	if fs.gfield == ZeroAddress {
 		return oneBytesK(zeroBytes())
@@ -1474,14 +1474,14 @@ func actGlobal(ops *OpStream, spec *OpSpec, immediates []string, bugType bugChec
 	return unknownKnowledge()
 }
 
-func actBytecBlock(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actBytecBlock(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	if bugType == bugCheck(0) {
 		ops.bytecBlockCount++
 	}
 	return nil
 }
 
-func actBytec(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actBytec(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	ops.currBlock.accessedBytec = true
 	constIndex, _ := strconv.ParseUint(immediates[0], 0, 64)
 	if uint(constIndex) >= uint(len(ops.bytec)) {
@@ -1491,7 +1491,7 @@ func actBytec(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck
 	return oneBytesK(ops.bytec[constIndex])
 }
 
-func actQuickBytec(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actQuickBytec(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	ops.currBlock.accessedBytec = true
 	constIndex, _ := strconv.ParseInt(spec.Name[6:], 10, 0)
 	if uint(constIndex) >= uint(len(ops.bytec)) {
@@ -1513,7 +1513,7 @@ func (ops *OpStream) checkSuccessfulExit(bugType bugCheck, blockNum int, typeSta
 	return false
 }
 
-func actReturn(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actReturn(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length > 0 {
 		topVal := ops.currBlock.knowledgeStacks[bugType][length-1]
@@ -1528,7 +1528,7 @@ func actReturn(ops *OpStream, spec *OpSpec, immediates []string, bugType bugChec
 	return nil
 }
 
-func actBZ(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actBZ(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length > 0 && ops.currBlock.knowledgeStacks[bugType][length-1].valKnown {
 		if ops.currBlock.knowledgeStacks[bugType][length-1].valUint == 0 {
@@ -1540,7 +1540,7 @@ func actBZ(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, t
 	return nil
 }
 
-func actBNZ(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actBNZ(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length > 0 && ops.currBlock.knowledgeStacks[bugType][length-1].valKnown {
 		if ops.currBlock.knowledgeStacks[bugType][length-1].valUint == 0 {
@@ -1552,7 +1552,7 @@ func actBNZ(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, 
 	return nil
 }
 
-func actAssert(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actAssert(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length > 0 && ops.currBlock.knowledgeStacks[bugType][length-1].valKnown {
 		if ops.currBlock.knowledgeStacks[bugType][length-1].valUint == 0 {
@@ -1562,7 +1562,7 @@ func actAssert(ops *OpStream, spec *OpSpec, immediates []string, bugType bugChec
 	return nil
 }
 
-func actAndOr(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actAndOr(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	// && and || get their own actFunc instead of being in actTwoIntsOneRetInt b/c we can often tell the result from only one value
 	// Note this is true for certain other ops as well, but these are the most important
 	length := len(ops.currBlock.knowledgeStacks[bugType])
@@ -1628,7 +1628,7 @@ func actAndOr(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck
 	}
 }
 
-func actTwoIntsOneRetInt(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actTwoIntsOneRetInt(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	length := len(ops.currBlock.knowledgeStacks[bugType])
 	if length < 2 {
 		return unknownKnowledge()
@@ -1709,7 +1709,7 @@ func actTwoIntsOneRetInt(ops *OpStream, spec *OpSpec, immediates []string, bugTy
 	}
 }
 
-func actTxn(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []StackKnowledge {
+func actTxn(ops *OpStream, spec *OpSpec, immediates []string, bugType bugCheck, typeStackTop StackTypes) []stackKnowledge {
 	// 32 bytes of ff are used for anything where we want to check if there are restrictions on what addresses are allowed
 	// For example during closeCheck we give ff bytes for txn CloseRemainderTo b/c if ff bytes manage to get through, it is likely nearly anything can
 	if len(immediates) != 1 {
@@ -1958,7 +1958,7 @@ const (
 	erroring = -4
 )
 
-type StackKnowledge struct {
+type stackKnowledge struct {
 	valUint  uint64
 	valBytes []byte
 	valKnown bool
@@ -1981,7 +1981,7 @@ type basicBlock struct {
 	linesArgsNeeded  []int              // Sourcelines for each entry in Args which is useful for listing sourcelines for errors
 	jumpTo           int                // Index into ops.blocks, where control can jump to out of the block, i.e. via a branch
 	flowTo           int                // Where control can flow to, i.e. the block immediately following a conditional branch
-	knowledgeStacks  [][]StackKnowledge // Keeps track of the different knowledgeStacks (we need one for each different scenario we run)
+	knowledgeStacks  [][]stackKnowledge // Keeps track of the different knowledgeStacks (we need one for each different scenario we run)
 	jumpInstructions []byte             // Tells findBugs where to go next after this block for each bugType
 	callSubs         bool               // True if and only if last instruction in block is callsub (callsub causes a block to end in this configuration)
 	visits           []callStack        // During findBugs anytime we visit a block, we record the callstack we came with
@@ -2031,14 +2031,14 @@ func (ops *OpStream) appendBlock() {
 	ops.stackSourceLines = nil
 	ops.currentArgs = nil
 	ops.currBlock = basicBlock{startPc: ops.pending.Len()}
-	ops.currBlock.knowledgeStacks = make([][]StackKnowledge, numBugTypes)
+	ops.currBlock.knowledgeStacks = make([][]stackKnowledge, numBugTypes)
 	ops.currBlock.jumpInstructions = make([]byte, numBugTypes)
 }
 
 // Applies changes to knowledgeStacks for each bugType based on the spec's actFunc
 func doActFunc(ops *OpStream, spec *OpSpec, immediates []string, args, returns StackTypes) {
 	for bugType := bugCheck(0); bugType < numBugTypes; bugType++ {
-		toAppend := make([]StackKnowledge, len(returns))
+		toAppend := make([]stackKnowledge, len(returns))
 		if spec.Details.actFunc != nil {
 			toAppend = spec.Details.actFunc(ops, spec, immediates, bugType, args)
 		}
@@ -2225,7 +2225,7 @@ func (ops *OpStream) assemble(fin io.Reader) error {
 	scanner := bufio.NewScanner(fin)
 	justAddedBlock := false
 	ops.currBlock = basicBlock{startPc: 0}
-	ops.currBlock.knowledgeStacks = make([][]StackKnowledge, numBugTypes)
+	ops.currBlock.knowledgeStacks = make([][]stackKnowledge, numBugTypes)
 	ops.currBlock.jumpInstructions = make([]byte, numBugTypes)
 	ops.bugTypeToSuccessPath = make(map[bugCheck][]int)
 	ops.startPcToBlock = make(map[int]int)
