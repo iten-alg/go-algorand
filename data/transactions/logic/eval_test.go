@@ -4232,10 +4232,10 @@ func obfuscateBugCheck(program string) string {
 	// but prevents assembly from detecting type errors.  Allows
 	// evaluation testing of a program that would be rejected by
 	// assembler.
-	if strings.Contains(program, "#pragma disable bugCheck") {
+	if strings.Contains(program, "#pragma disable bugcheck") {
 		return program // Already done.  Tests sometimes use at multiple levels
 	}
-	return "#pragma disable bugCheck;" + program
+	return "#pragma disable bugcheck;" + program
 }
 
 type evalTester func(pass bool, err error) bool
