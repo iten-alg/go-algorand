@@ -2233,6 +2233,28 @@ func TestAssembleConstants(t *testing.T) {
 	}
 }
 
+func TestIntAndIntcBlock(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	// Assembler should use pushint on int pseudo-op after program manually created intcblock unless int is already in the block
+	ops := testProg(t, "intcblock 0x01 0x02; int 0x04", AssemblerMaxVersion)
+	expected := []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x81, 0x04}
+	require.Equal(t, expected, ops.Program)
+	// If the int is already in the block, we mind as well use the block
+	ops = testProg(t, "intcblock 0x01 0x02; int 0x02", AssemblerMaxVersion)
+	expected = []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x23}
+	require.Equal(t, expected, ops.Program)
+	// Previous int pseudo-ops should be pushints
+	ops = testProg(t, "int 0x01; intcblock 0x01 0x02; int 0x02", AssemblerMaxVersion)
+	expected = []byte{byte(AssemblerMaxVersion), 0x81, 0x01, 0x20, 0x02, 0x01, 0x02, 0x23}
+	require.Equal(t, expected, ops.Program)
+	// Note if there is a single manual intcblock that does not get run or gets run after pseduo-op, the pseduo-op will be messed up
+	// If multiple intcblocks, int now only acts as pushint
+	ops = testProg(t, "intcblock 0x02 0x03; int 0x02; int 0x04; int 0x0a; intcblock 0x04 0x0a; int 0x05; int 0x03; int 0x04", AssemblerMaxVersion)
+	expected = []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x02, 0x03, 0x81, 0x02, 0x81, 0x04, 0x81, 0x0a, 0x20, 0x02, 0x04, 0x0a, 0x81, 0x05, 0x81, 0x03, 0x81, 0x04}
+	require.Equal(t, expected, ops.Program)
+
+}
+
 func TestErrShortBytecblock(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()

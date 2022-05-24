@@ -506,7 +506,6 @@ func intPush(ops *OpStream, val uint64) (write []byte) {
 	write = make([]byte, 1+vlen)
 	write[0] = OpsByName[ops.Version]["pushint"].Opcode
 	copy(write[1:], scratch[:vlen])
-
 	return write
 }
 
