@@ -2277,7 +2277,7 @@ func TestPseudoByteAndBytecBlock(t *testing.T) {
 	ops := testProg(t, "bytecblock 0x01 0x02; byte 0x04", AssemblerMaxVersion)
 	expected := []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x04}
 	require.Equal(t, expected, ops.Program)
-	// If the bytes are already in the block, we mind as well use the block
+	// If the bytes are already in the block, we might as well use the block
 	ops = testProg(t, "bytecblock 0x01 0x02; byte 0x02", AssemblerMaxVersion)
 	expected = []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x29}
 	require.Equal(t, expected, ops.Program)
