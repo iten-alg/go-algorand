@@ -182,18 +182,9 @@ func (ref byteReference) makeNewReference(ops *OpStream, singleton bool, newInde
 	opBytec2 := OpsByName[ops.Version]["bytec_2"].Opcode
 	opBytec3 := OpsByName[ops.Version]["bytec_3"].Opcode
 	opBytec := OpsByName[ops.Version]["bytec"].Opcode
-	opPushBytes := OpsByName[ops.Version]["pushbytes"].Opcode
 
 	if singleton {
-		var scratch [binary.MaxVarintLen64]byte
-		vlen := binary.PutUvarint(scratch[:], uint64(len(ref.value)))
-
-		newBytes := make([]byte, 1+vlen+len(ref.value))
-		newBytes[0] = opPushBytes
-		copy(newBytes[1:], scratch[:vlen])
-		copy(newBytes[1+vlen:], ref.value)
-
-		return newBytes
+		return bytesPush(ops, ref.value)
 	}
 
 	switch newIndex {
@@ -222,13 +213,15 @@ type OpStream struct {
 	// and cblocks added before these bytes become a legal program.
 	pending bytes.Buffer
 
-	intc         []uint64       // observed ints in code. We'll put them into a intcblock
-	intcRefs     []intReference // references to int pseudo-op constants, used for optimization
-	hasIntcBlock bool           // prevent prepending intcblock because asm has one
+	intc              []uint64       // observed ints in code. We'll put them into a intcblock
+	intcRefs          []intReference // references to int pseudo-op constants, used for optimization
+	hasIntcBlock      bool           // prevent prepending intcblock because asm has one
+	hasMultIntcBlocks bool           // int pseudo-op becomes pushint if multiple intc blocks
 
-	bytec         [][]byte        // observed bytes in code. We'll put them into a bytecblock
-	bytecRefs     []byteReference // references to byte/addr pseudo-op constants, used for optimization
-	hasBytecBlock bool            // prevent prepending bytecblock because asm has one
+	bytec              [][]byte        // observed bytes in code. We'll put them into a bytecblock
+	bytecRefs          []byteReference // references to byte/addr pseudo-op constants, used for optimization
+	hasBytecBlock      bool            // prevent prepending bytecblock because asm has one
+	hasMultBytecBlocks bool            // use pushbytes instead of bytec in pseudo-ops if multiple bytec blocks
 
 	// tracks information we know to be true at the point being assembled
 	known        ProgramKnowledge
@@ -430,6 +423,11 @@ func (ops *OpStream) Bytec(constIndex uint) {
 // ByteLiteral writes opcodes and data for loading a []byte literal
 // Values are accumulated so that they can be put into a bytecblock
 func (ops *OpStream) ByteLiteral(val []byte) {
+	if ops.hasMultBytecBlocks {
+		// If multiple bytecblocks were created, we can't know which one we'll be in, we just treat this like pushbytes
+		ops.pending.Write(bytesPush(ops, val))
+		return
+	}
 	found := false
 	var constIndex uint
 	for i, cv := range ops.bytec {
@@ -440,6 +438,11 @@ func (ops *OpStream) ByteLiteral(val []byte) {
 		}
 	}
 	if !found {
+		if ops.hasBytecBlock {
+			// If manually created bytecblock, we will not add to their block but instead treat this as a pushbytes op
+			ops.pending.Write(bytesPush(ops, val))
+			return
+		}
 		constIndex = uint(len(ops.bytec))
 		ops.bytec = append(ops.bytec, val)
 	}
@@ -512,6 +515,15 @@ func asmPushInt(ops *OpStream, spec *OpSpec, args []string) error {
 	ops.pending.Write(scratch[:vlen])
 	return nil
 }
+func bytesPush(ops *OpStream, val []byte) (write []byte) {
+	var scratch [binary.MaxVarintLen64]byte
+	vlen := binary.PutUvarint(scratch[:], uint64(len(val)))
+	write = make([]byte, 1+vlen+len(val))
+	write[0] = OpsByName[ops.Version]["pushbytes"].Opcode
+	copy(write[1:], scratch[:vlen])
+	copy(write[1+vlen:], val)
+	return
+}
 func asmPushBytes(ops *OpStream, spec *OpSpec, args []string) error {
 	if len(args) == 0 {
 		return ops.errorf("%s operation needs byte literal argument", spec.Name)
@@ -523,11 +535,7 @@ func asmPushBytes(ops *OpStream, spec *OpSpec, args []string) error {
 	if len(args) != consumed {
 		return ops.errorf("%s operation with extraneous argument", spec.Name)
 	}
-	ops.pending.WriteByte(spec.Opcode)
-	var scratch [binary.MaxVarintLen64]byte
-	vlen := binary.PutUvarint(scratch[:], uint64(len(val)))
-	ops.pending.Write(scratch[:vlen])
-	ops.pending.Write(val)
+	ops.pending.Write(bytesPush(ops, val))
 	return nil
 }
 
@@ -734,7 +742,11 @@ func asmIntCBlock(ops *OpStream, spec *OpSpec, args []string) error {
 		ops.pending.Write(scratch[:l])
 		ops.intc[i] = cu
 	}
-	ops.hasIntcBlock = true
+	if ops.hasIntcBlock {
+		ops.hasMultIntcBlocks = true
+	} else {
+		ops.hasIntcBlock = true
+	}
 	return nil
 }
 
@@ -763,9 +775,25 @@ func asmByteCBlock(ops *OpStream, spec *OpSpec, args []string) error {
 		ops.pending.Write(scratch[:l])
 		ops.pending.Write(bv)
 	}
+	if ops.hasBytecBlock {
+		ops.hasMultBytecBlocks = true
+	} else {
+		ops.hasBytecBlock = true
+	}
+	raw := ops.pending.Bytes()
+	// Potentially dangerous but in theory the refs are in order so going backwards saves us updating the indices
+	for i := len(ops.bytecRefs) - 1; i >= 0; i-- {
+		ref := ops.bytecRefs[i]
+		oldLength, err := ref.length(ops, raw)
+		if err != nil {
+			ops.error(err)
+			return nil
+		}
+		raw = replaceBytes(raw, ref.position, oldLength, bytesPush(ops, ref.value))
+	}
+	ops.pending = *bytes.NewBuffer(raw)
 	ops.bytecRefs = nil
 	ops.bytec = bvals
-	ops.hasBytecBlock = true
 	return nil
 }
 
@@ -1400,8 +1428,14 @@ func (ops *OpStream) assemble(text string) error {
 	}
 
 	if ops.Version >= optimizeConstantsEnabledVersion {
-		ops.optimizeIntcBlock()
-		ops.optimizeBytecBlock()
+		err := ops.optimizeIntcBlock()
+		if err != nil {
+			ops.error(err)
+		}
+		err = ops.optimizeBytecBlock()
+		if err != nil {
+			ops.error(err)
+		}
 	}
 
 	ops.resolveLabels()

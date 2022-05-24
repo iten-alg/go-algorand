@@ -2244,6 +2244,27 @@ func TestErrShortBytecblock(t *testing.T) {
 	require.Equal(t, err, errShortIntcblock)
 }
 
+func TestPseudoByteAndBytecBlock(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	// Assembler should use pushbytes on byte pseudo-op after program manually created bytecblock unless bytes are already in the block
+	ops := testProg(t, "bytecblock 0x01 0x02; byte 0x04", AssemblerMaxVersion)
+	expected := []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x04}
+	require.Equal(t, expected, ops.Program)
+	// If the bytes are already in the block, we mind as well use the block
+	ops = testProg(t, "bytecblock 0x01 0x02; byte 0x02", AssemblerMaxVersion)
+	expected = []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x29}
+	require.Equal(t, expected, ops.Program)
+	// Previous byte pseudo-ops should be pushybytes
+	ops = testProg(t, "byte 0x01; bytecblock 0x01 0x02; byte 0x02", AssemblerMaxVersion)
+	expected = []byte{byte(AssemblerMaxVersion), 0x80, 0x01, 0x01, 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x29}
+	require.Equal(t, expected, ops.Program)
+	// Note if there is a single manual bytecblock that does not get run or gets run after pseduo-op, the pseduo-op will be messed up
+	// If multiple bytecblocks, byte now only acts as pushbytes
+	ops = testProg(t, "bytecblock 0x02 0x03; byte 0x02; byte 0x04; byte 0x0a; bytecblock 0x04 0x0a; byte 0x05; byte 0x03; byte 0x04", AssemblerMaxVersion)
+	expected = []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x02, 0x01, 0x03, 0x80, 0x01, 0x02, 0x80, 0x01, 0x04, 0x80, 0x01, 0x0a, 0x26, 0x02, 0x01, 0x04, 0x01, 0x0a, 0x80, 0x01, 0x05, 0x80, 0x01, 0x03, 0x80, 0x01, 0x04}
+	require.Equal(t, expected, ops.Program)
+
+}
 func TestMethodWarning(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
