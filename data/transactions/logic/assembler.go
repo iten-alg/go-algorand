@@ -113,17 +113,9 @@ func (ref intReference) makeNewReference(ops *OpStream, singleton bool, newIndex
 	opIntc2 := OpsByName[ops.Version]["intc_2"].Opcode
 	opIntc3 := OpsByName[ops.Version]["intc_3"].Opcode
 	opIntc := OpsByName[ops.Version]["intc"].Opcode
-	opPushInt := OpsByName[ops.Version]["pushint"].Opcode
 
 	if singleton {
-		var scratch [binary.MaxVarintLen64]byte
-		vlen := binary.PutUvarint(scratch[:], ref.value)
-
-		newBytes := make([]byte, 1+vlen)
-		newBytes[0] = opPushInt
-		copy(newBytes[1:], scratch[:vlen])
-
-		return newBytes
+		return intPush(ops, ref.value)
 	}
 
 	switch newIndex {
@@ -375,6 +367,10 @@ func (ops *OpStream) Intc(constIndex uint) {
 
 // Uint writes opcodes for loading a uint literal
 func (ops *OpStream) Uint(val uint64) {
+	if ops.hasMultIntcBlocks {
+		ops.pending.Write(intPush(ops, val))
+		return
+	}
 	found := false
 	var constIndex uint
 	for i, cv := range ops.intc {
@@ -385,6 +381,10 @@ func (ops *OpStream) Uint(val uint64) {
 		}
 	}
 	if !found {
+		if ops.hasIntcBlock {
+			ops.pending.Write(intPush(ops, val))
+			return
+		}
 		constIndex = uint(len(ops.intc))
 		ops.intc = append(ops.intc, val)
 	}
@@ -500,6 +500,15 @@ func asmByteC(ops *OpStream, spec *OpSpec, args []string) error {
 	ops.Bytec(uint(constIndex))
 	return nil
 }
+func intPush(ops *OpStream, val uint64) (write []byte) {
+	var scratch [binary.MaxVarintLen64]byte
+	vlen := binary.PutUvarint(scratch[:], val)
+	write = make([]byte, 1+vlen)
+	write[0] = OpsByName[ops.Version]["pushint"].Opcode
+	copy(write[1:], scratch[:vlen])
+
+	return write
+}
 
 func asmPushInt(ops *OpStream, spec *OpSpec, args []string) error {
 	if len(args) != 1 {
@@ -509,10 +518,7 @@ func asmPushInt(ops *OpStream, spec *OpSpec, args []string) error {
 	if err != nil {
 		return ops.error(err)
 	}
-	ops.pending.WriteByte(spec.Opcode)
-	var scratch [binary.MaxVarintLen64]byte
-	vlen := binary.PutUvarint(scratch[:], val)
-	ops.pending.Write(scratch[:vlen])
+	ops.pending.Write(intPush(ops, val))
 	return nil
 }
 func bytesPush(ops *OpStream, val []byte) (write []byte) {
@@ -727,6 +733,18 @@ func asmMethod(ops *OpStream, spec *OpSpec, args []string) error {
 }
 
 func asmIntCBlock(ops *OpStream, spec *OpSpec, args []string) error {
+	raw := ops.pending.Bytes()
+	// Potentially dangerous but in theory the refs are in order so going backwards saves us updating the indices
+	for i := len(ops.intcRefs) - 1; i >= 0; i-- {
+		ref := ops.intcRefs[i]
+		oldLength, err := ref.length(ops, raw)
+		if err != nil {
+			ops.error(err)
+			return nil
+		}
+		raw = replaceBytes(raw, ref.position, oldLength, intPush(ops, ref.value))
+	}
+	ops.pending = *bytes.NewBuffer(raw)
 	ops.pending.WriteByte(spec.Opcode)
 	var scratch [binary.MaxVarintLen64]byte
 	l := binary.PutUvarint(scratch[:], uint64(len(args)))
