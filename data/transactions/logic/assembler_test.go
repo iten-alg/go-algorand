@@ -2239,7 +2239,7 @@ func TestIntAndIntcBlock(t *testing.T) {
 	ops := testProg(t, "intcblock 0x01 0x02; int 0x04", AssemblerMaxVersion)
 	expected := []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x81, 0x04}
 	require.Equal(t, expected, ops.Program)
-	// If the int is already in the block, we mind as well use the block
+	// If the int is already in the block, we might as well use the block
 	ops = testProg(t, "intcblock 0x01 0x02; int 0x02", AssemblerMaxVersion)
 	expected = []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x23}
 	require.Equal(t, expected, ops.Program)
