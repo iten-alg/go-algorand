@@ -2169,7 +2169,7 @@ func disassemble(dis *disassembleState, spec *OpSpec) (string, error) {
 	}
 	if strings.HasPrefix(spec.Name, "bytec_") {
 		b := spec.Name[len(spec.Name)-1] - byte('0')
-		if int(b) < len(dis.intc) && !dis.hasMultipleBytecBlocks {
+		if int(b) < len(dis.bytec) && !dis.hasMultipleBytecBlocks {
 			out += fmt.Sprintf(" // %s", guessByteFormat(dis.bytec[b]))
 		}
 	}

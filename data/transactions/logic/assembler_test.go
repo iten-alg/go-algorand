@@ -1757,7 +1757,7 @@ func TestDisassembleInt(t *testing.T) {
 	ops := testProg(t, txnSample, AssemblerMaxVersion)
 	disassembled, err := Disassemble(ops.Program)
 	require.NoError(t, err)
-	// Would ne nice to check that these appear in the
+	// Would be nice to check that these appear in the
 	// disassembled output in the right order, but I don't want to
 	// hardcode checks that they are in certain intc slots.
 	require.Contains(t, disassembled, "// 17")
@@ -1784,6 +1784,28 @@ func TestDisassembleIntc(t *testing.T) {
 	require.Contains(t, disassembled, "// 7")
 	require.Contains(t, disassembled, "// 2")
 	ops = testProg(t, "intcblock 0x01 0x02 0x03 0x04 0x05 0x06; intc_0; intc 4; intcblock 0x07 0x08 0x09 0xa 0xb 0xc; intc_1; intc 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.NotContains(t, disassembled, "//")
+}
+
+func TestDisassembleBytec(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	ops := testProg(t, "bytecblock 0x01 0x02 0x03 0x04 0x05 0x06; bytec_0; bytec 5", AssemblerMaxVersion)
+	disassembled, err := Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 0x01")
+	require.Contains(t, disassembled, "// 0x06")
+	// Programs with only one bytecblock should have comments with the indexed values regardless of when the bytecblock shows up since bytec ops can only be referencing it (though they can error)
+	ops = testProg(t, "pushbytes 0x08; b label2; label1:; bytec_1; bytec 6; b label3; label2:; bytecblock 0x01 0x02 0x03 0x04 0x05 0x06 0x07; b label1; label3:; bytec_0; bytec 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 0x01")
+	require.Contains(t, disassembled, "// 0x06")
+	require.Contains(t, disassembled, "// 0x07")
+	require.Contains(t, disassembled, "// 0x02")
+	ops = testProg(t, "bytecblock 0x01 0x02 0x03 0x04 0x05 0x06; bytec_0; bytec 4; bytecblock 0x07 0x08 0x09 0x0a 0x0b 0x0c; bytec_1; bytec 5", AssemblerMaxVersion)
 	disassembled, err = Disassemble(ops.Program)
 	require.NoError(t, err)
 	require.NotContains(t, disassembled, "//")
