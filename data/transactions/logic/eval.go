@@ -4692,7 +4692,7 @@ func opItxnSubmit(cx *EvalContext) error {
 // PcDetails return PC and disassembled instructions at PC up to 2 opcodes back
 func (cx *EvalContext) PcDetails() (pc int, dis string) {
 	const maxNumAdditionalOpcodes = 2
-	text, ds, err := disassembleInstrumented(cx.program, nil)
+	text, ds, err := disassembleInstrumented(cx.program, nil, false, false, false, nil, nil)
 	if err != nil {
 		return cx.pc, dis
 	}

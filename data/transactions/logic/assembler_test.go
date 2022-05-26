@@ -1767,6 +1767,28 @@ func TestDisassembleInt(t *testing.T) {
 	require.Contains(t, disassembled, "pushint 5")
 }
 
+func TestDisassembleIntc(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	ops := testProg(t, "intcblock 0x01 0x02 0x03 0x04 0x05 0x06; intc_0; intc 5", AssemblerMaxVersion)
+	disassembled, err := Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 1")
+	require.Contains(t, disassembled, "// 6")
+	// Programs with only one intcblock should have comments with the indexed values regardless of when the intcblock shows up since intc ops can only be referencing it (though they can error)
+	ops = testProg(t, "pushint 0x08; b label2; label1:; intc_1; intc 6; b label3; label2:; intcblock 0x01 0x02 0x03 0x04 0x05 0x06 0x07; b label1; label3:; intc_0; intc 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 1")
+	require.Contains(t, disassembled, "// 6")
+	require.Contains(t, disassembled, "// 7")
+	require.Contains(t, disassembled, "// 2")
+	ops = testProg(t, "intcblock 0x01 0x02 0x03 0x04 0x05 0x06; intc_0; intc 4; intcblock 0x07 0x08 0x09 0xa 0xb 0xc; intc_1; intc 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.NotContains(t, disassembled, "//")
+}
+
 func TestDisassembleTxna(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
@@ -2239,15 +2261,14 @@ func TestIntAndIntcBlock(t *testing.T) {
 	ops := testProg(t, "intcblock 0x01 0x02; int 0x04", AssemblerMaxVersion)
 	expected := []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x81, 0x04}
 	require.Equal(t, expected, ops.Program)
-	// If the int is already in the block, we might as well use the block
+	// If the int is already in the block, we might as well use the block, but only if it comes at the beginning of the program
 	ops = testProg(t, "intcblock 0x01 0x02; int 0x02", AssemblerMaxVersion)
 	expected = []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x23}
 	require.Equal(t, expected, ops.Program)
-	// Previous int pseudo-ops should be pushints
+	// If block does not come at beginning, we can't know when it will be run, so all int pseudo-ops turn into pushints
 	ops = testProg(t, "int 0x01; intcblock 0x01 0x02; int 0x02", AssemblerMaxVersion)
-	expected = []byte{byte(AssemblerMaxVersion), 0x81, 0x01, 0x20, 0x02, 0x01, 0x02, 0x23}
+	expected = []byte{byte(AssemblerMaxVersion), 0x81, 0x01, 0x20, 0x02, 0x01, 0x02, 0x81, 0x02}
 	require.Equal(t, expected, ops.Program)
-	// Note if there is a single manual intcblock that does not get run or gets run after pseduo-op, the pseduo-op will be messed up
 	// If multiple intcblocks, int now only acts as pushint
 	ops = testProg(t, "intcblock 0x02 0x03; int 0x02; int 0x04; int 0x0a; intcblock 0x04 0x0a; int 0x05; int 0x03; int 0x04", AssemblerMaxVersion)
 	expected = []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x02, 0x03, 0x81, 0x02, 0x81, 0x04, 0x81, 0x0a, 0x20, 0x02, 0x04, 0x0a, 0x81, 0x05, 0x81, 0x03, 0x81, 0x04}
@@ -2277,15 +2298,14 @@ func TestPseudoByteAndBytecBlock(t *testing.T) {
 	ops := testProg(t, "bytecblock 0x01 0x02; byte 0x04", AssemblerMaxVersion)
 	expected := []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x04}
 	require.Equal(t, expected, ops.Program)
-	// If the bytes are already in the block, we might as well use the block
+	// If the bytes are already in the block, we might as well use the block, but only if it comes at the beginning of the program
 	ops = testProg(t, "bytecblock 0x01 0x02; byte 0x02", AssemblerMaxVersion)
 	expected = []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x29}
 	require.Equal(t, expected, ops.Program)
-	// Previous byte pseudo-ops should be pushybytes
+	// If block does not come at beginning, we can't know when it will be run, so all byte pseudo-ops turn into pushbytes
 	ops = testProg(t, "byte 0x01; bytecblock 0x01 0x02; byte 0x02", AssemblerMaxVersion)
-	expected = []byte{byte(AssemblerMaxVersion), 0x80, 0x01, 0x01, 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x29}
+	expected = []byte{byte(AssemblerMaxVersion), 0x80, 0x01, 0x01, 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x02}
 	require.Equal(t, expected, ops.Program)
-	// Note if there is a single manual bytecblock that does not get run or gets run after pseduo-op, the pseduo-op will be messed up
 	// If multiple bytecblocks, byte now only acts as pushbytes
 	ops = testProg(t, "bytecblock 0x02 0x03; byte 0x02; byte 0x04; byte 0x0a; bytecblock 0x04 0x0a; byte 0x05; byte 0x03; byte 0x04", AssemblerMaxVersion)
 	expected = []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x02, 0x01, 0x03, 0x80, 0x01, 0x02, 0x80, 0x01, 0x04, 0x80, 0x01, 0x0a, 0x26, 0x02, 0x01, 0x04, 0x01, 0x0a, 0x80, 0x01, 0x05, 0x80, 0x01, 0x03, 0x80, 0x01, 0x04}
