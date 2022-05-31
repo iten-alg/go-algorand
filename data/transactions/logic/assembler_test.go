@@ -2341,25 +2341,8 @@ func TestPseudoByteAndBytecBlock(t *testing.T) {
 		ops := testProg(t, prog, AssemblerMaxVersion)
 		require.Equal(t, expected, ops.Program)
 	}
-	/*
-		// Assembler should use pushbytes on byte pseudo-op after program manually created bytecblock unless bytes are already in the block
-		ops := testProg(t, "bytecblock 0x01 0x02; byte 0x04", AssemblerMaxVersion)
-		expected := []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x04}
-		require.Equal(t, expected, ops.Program)
-		// If the bytes are already in the block, we might as well use the block, but only if it comes at the beginning of the program
-		ops = testProg(t, "bytecblock 0x01 0x02; byte 0x02", AssemblerMaxVersion)
-		expected = []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x29}
-		require.Equal(t, expected, ops.Program)
-		// If block does not come at beginning, we can't know when it will be run, so all byte pseudo-ops turn into pushbytes
-		ops = testProg(t, "byte 0x01; bytecblock 0x01 0x02; byte 0x02", AssemblerMaxVersion)
-		expected = []byte{byte(AssemblerMaxVersion), 0x80, 0x01, 0x01, 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x02}
-		require.Equal(t, expected, ops.Program)
-		// If multiple bytecblocks, byte now only acts as pushbytes
-		ops = testProg(t, "bytecblock 0x02 0x03; byte 0x02; byte 0x04; byte 0x0a; bytecblock 0x04 0x0a; byte 0x05; byte 0x03; byte 0x04", AssemblerMaxVersion)
-		expected = []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x02, 0x01, 0x03, 0x80, 0x01, 0x02, 0x80, 0x01, 0x04, 0x80, 0x01, 0x0a, 0x26, 0x02, 0x01, 0x04, 0x01, 0x0a, 0x80, 0x01, 0x05, 0x80, 0x01, 0x03, 0x80, 0x01, 0x04}
-		require.Equal(t, expected, ops.Program)
-	*/
 }
+
 func TestMethodWarning(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
