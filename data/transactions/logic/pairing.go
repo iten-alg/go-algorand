@@ -18,13 +18,19 @@ package logic
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 
+	"github.com/consensys/gnark-crypto/ecc/bls12-381"
+	BLS12381fp "github.com/consensys/gnark-crypto/ecc/bls12-381/fp"
 	"github.com/consensys/gnark-crypto/ecc/bn254"
-	"github.com/consensys/gnark-crypto/ecc/bn254/fp"
+	BN254fp "github.com/consensys/gnark-crypto/ecc/bn254/fp"
 )
 
-func bytesToBN254Field(b []byte) (ret fp.Element) {
+const bls12381fpSize = 64
+const bn254fpSize = 32
+
+func bytesToBN254Field(b []byte) (ret BN254fp.Element) {
 	ret.SetBytes(b)
 	return
 }
@@ -112,5 +118,63 @@ func opBn256Pairing(cx *EvalContext) error {
 	cx.stack = cx.stack[:last]
 	cx.stack[prev].Uint = boolToUint(ok)
 	cx.stack[prev].Bytes = nil
+	return nil
+}
+
+func bytesToBLS12381Field(b []byte) (ret BLS12381fp.Element) {
+	ret.SetBytes(b)
+	return
+}
+
+func bytesToBLS12381G1(b []byte) (ret bls12381.G1Affine) {
+	ret.X = bytesToBLS12381Field(b[:bls12381fpSize])
+	ret.Y = bytesToBLS12381Field(b[bls12381fpSize : 2*bls12381fpSize])
+	return
+}
+
+func bytesToBLS12381G1s(b []byte) (ret []bls12381.G1Affine) {
+	for i := 0; i < len(b)/(2*bls12381fpSize); i++ {
+		ret = append(ret, bytesToBLS12381G1(b[i*2*bls12381fpSize:i*2*bls12381fpSize+2*bls12381fpSize]))
+	}
+	return
+}
+
+func bytesToBLS12381G2(b []byte) (ret bls12381.G2Affine) {
+	ret.X.A0 = bytesToBLS12381Field(b[:bls12381fpSize])
+	ret.X.A1 = bytesToBLS12381Field(b[bls12381fpSize : 2*bls12381fpSize])
+	ret.Y.A0 = bytesToBLS12381Field(b[2*bls12381fpSize : 3*bls12381fpSize])
+	ret.Y.A1 = bytesToBLS12381Field(b[3*bls12381fpSize : 4*bls12381fpSize])
+	return
+}
+
+func bytesToBLS12381G2s(b []byte) (ret []bls12381.G2Affine) {
+	for i := 0; i < len(b)/(4*bls12381fpSize); i++ {
+		ret = append(ret, bytesToBLS12381G2(b[i*4*bls12381fpSize:i*4*bls12381fpSize+4*bls12381fpSize]))
+	}
+	return
+}
+
+func bls12381G1ToBytes(g1 *bls12381.G1Affine) (ret []byte) {
+	retX := g1.X.Bytes()
+	retY := g1.Y.Bytes()
+	ret = append(retX[:], retY[:]...)
+	return
+}
+
+func opBLS12381Add(cx *EvalContext) error {
+	last := len(cx.stack) - 1
+	prev := last - 1
+	aBytes := cx.stack[prev].Bytes
+	bBytes := cx.stack[last].Bytes
+	if len(aBytes) != 2*bls12381fpSize || len(bBytes) != 2*bls12381fpSize {
+		return fmt.Errorf("expect G1 in %d bytes", 2*bls12381fpSize)
+	}
+	a := bytesToBLS12381G1(aBytes)
+	b := bytesToBLS12381G1(bBytes)
+	// Should check to make sure gnark will put affine addition under the "Add" method
+	res := new(bls12381.G1Affine).Add(&a, &b)
+	resBytes := bls12381G1ToBytes(res)
+	cx.stack = cx.stack[:last]
+	cx.stack[prev].Bytes = resBytes
 	return nil
 }
