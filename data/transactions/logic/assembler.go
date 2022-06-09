@@ -821,6 +821,19 @@ func asmBranch(ops *OpStream, spec *OpSpec, args []string) error {
 	return nil
 }
 
+func asmMulti(ops *OpStream, spec *OpSpec, args []string) error {
+	if len(args) < 1 {
+		return ops.errorf("%s expects a secondary name", spec.Name)
+	}
+	for _, secondary := range spec.OpDetails.twoByteOps {
+		if args[0] == secondary.Name {
+			ops.pending.WriteByte(spec.Opcode)
+			return secondary.OpDetails.asm(ops, &secondary, args[1:])
+		}
+	}
+	return ops.errorf("No op found beginning with %s %s", spec.Name, args[0])
+}
+
 func asmSubstring(ops *OpStream, spec *OpSpec, args []string) error {
 	err := asmDefault(ops, spec, args)
 	if err != nil {
@@ -1375,7 +1388,16 @@ func (ops *OpStream) assemble(text string) error {
 				}
 			}
 			ops.trackStack(args, returns, fields)
-			spec.asm(ops, &spec, fields[1:])
+			if isMultiOp(&spec) {
+				// We might go down through the family of ops before getting an error, so we don't want to keep the partial opcodes
+				saved := ops.pending
+				err := spec.asm(ops, &spec, fields[1:])
+				if err != nil {
+					ops.pending = saved
+				}
+			} else {
+				spec.asm(ops, &spec, fields[1:])
+			}
 			if spec.deadens() { // An unconditional branch deadens the following code
 				ops.known.deaden()
 			}

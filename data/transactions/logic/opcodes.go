@@ -116,6 +116,7 @@ type OpDetails struct {
 	FullCost   linearCost  // if non-zero, the cost of the opcode, no immediates matter
 	Size       int         // if non-zero, the known size of opcode. if 0, check() determines.
 	Immediates []immediate // details of each immediate arg to opcode
+	twoByteOps []OpSpec
 }
 
 func (d *OpDetails) docCost() string {
@@ -162,11 +163,11 @@ func (d *OpDetails) Cost(program []byte, pc int, stack []stackValue) int {
 }
 
 func opDefault() OpDetails {
-	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil}
+	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil, nil}
 }
 
 func constants(asm asmFunc, checker checkFunc, name string, kind immKind) OpDetails {
-	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}}
+	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}, nil}
 }
 
 func opBranch() OpDetails {
@@ -176,6 +177,24 @@ func opBranch() OpDetails {
 	d.Size = 3
 	d.Immediates = []immediate{imm("target", immLabel)}
 	return d
+}
+
+func multiOp(dispatch byte, name string, specs ...OpSpec) (ret OpSpec) {
+	ret.Opcode = dispatch
+	ret.Name = name
+	ret.asm = asmMulti
+	for _, spec := range specs {
+		if spec.Version < ret.Version {
+			ret.Version = spec.Version
+		}
+	}
+	ret.OpDetails = opDefault()
+	ret.OpDetails.twoByteOps = specs
+	return
+}
+
+func isMultiOp(spec *OpSpec) bool {
+	return spec.OpDetails.twoByteOps != nil
 }
 
 func assembler(asm asmFunc) OpDetails {
