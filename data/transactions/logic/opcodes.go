@@ -110,13 +110,16 @@ type OpDetails struct {
 	asm    asmFunc    // assemble the op
 	check  checkFunc  // static check bytecode (and determine size)
 	refine refineFunc // refine arg/return types based on ProgramKnowledge at assembly time
+	ps     pseduoFunc
 
 	Modes runMode // all modes that opcode can run in. i.e (cx.mode & Modes) != 0 allows
 
-	FullCost   linearCost  // if non-zero, the cost of the opcode, no immediates matter
-	Size       int         // if non-zero, the known size of opcode. if 0, check() determines.
-	Immediates []immediate // details of each immediate arg to opcode
-	twoByteOps []OpSpec
+	FullCost      linearCost  // if non-zero, the cost of the opcode, no immediates matter
+	Size          int         // if non-zero, the known size of opcode. if 0, check() determines.
+	Immediates    []immediate // details of each immediate arg to opcode
+	childOps      []OpSpec
+	fullMultiCode []byte // Place for assembler to store full opcode
+	isDirectory   bool
 }
 
 func (d *OpDetails) docCost() string {
@@ -163,11 +166,11 @@ func (d *OpDetails) Cost(program []byte, pc int, stack []stackValue) int {
 }
 
 func opDefault() OpDetails {
-	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil, nil}
+	return OpDetails{asmDefault, nil, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil, nil, nil, false}
 }
 
 func constants(asm asmFunc, checker checkFunc, name string, kind immKind) OpDetails {
-	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}, nil}
+	return OpDetails{asm, checker, nil, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}, nil, nil, false}
 }
 
 func opBranch() OpDetails {
@@ -179,22 +182,40 @@ func opBranch() OpDetails {
 	return d
 }
 
-func multiOp(dispatch byte, name string, specs ...OpSpec) (ret OpSpec) {
+func multiOp(dispatch byte, name string, isDirectory bool, children ...OpSpec) (ret OpSpec) {
 	ret.Opcode = dispatch
 	ret.Name = name
-	ret.asm = asmMulti
-	for _, spec := range specs {
-		if spec.Version < ret.Version {
-			ret.Version = spec.Version
+	ret.asm = nil
+	for _, child := range children {
+		if child.Version < ret.Version {
+			ret.Version = child.Version
 		}
 	}
 	ret.OpDetails = opDefault()
-	ret.OpDetails.twoByteOps = specs
+	ret.childOps = children
+	ret.isDirectory = isDirectory
 	return
 }
 
 func isMultiOp(spec *OpSpec) bool {
-	return spec.OpDetails.twoByteOps != nil
+	return spec.childOps != nil
+}
+
+func pseduoOp(name string, ps pseduoFunc, children ...OpSpec) (ret OpSpec) {
+	ret = multiOp(0, name, true, children...)
+	ret.ps = ps
+	return
+}
+
+func getLeafSpecs(spec *OpSpec) []OpSpec {
+	if spec.childOps == nil {
+		return []OpSpec{*spec}
+	}
+	specs := make([]OpSpec, len(spec.childOps))
+	for _, child := range spec.childOps {
+		specs = append(getLeafSpecs(&child))
+	}
+	return specs
 }
 
 func assembler(asm asmFunc) OpDetails {
@@ -585,7 +606,23 @@ var OpSpecs = []OpSpec{
 	{0xad, "b^", opBytesBitXor, proto("bb:b"), 4, costly(6)},
 	{0xae, "b~", opBytesBitNot, proto("b:b"), 4, costly(4)},
 	{0xaf, "bzero", opBytesZero, proto("i:b"), 4, opDefault()},
-
+	multiOp(0xa0, "b", false, []OpSpec{
+		{0xa0, "b+", opBytesPlus, proto("bb:b"), LogicVersion, costly(10)},
+		{0xa1, "b-", opBytesMinus, proto("bb:b"), LogicVersion, costly(10)},
+		{0xa2, "b/", opBytesDiv, proto("bb:b"), LogicVersion, costly(20)},
+		{0xa3, "b*", opBytesMul, proto("bb:b"), LogicVersion, costly(20)},
+		{0xa4, "b<", opBytesLt, proto("bb:i"), LogicVersion, opDefault()},
+		{0xa5, "b>", opBytesGt, proto("bb:i"), LogicVersion, opDefault()},
+		{0xa6, "b<=", opBytesLe, proto("bb:i"), LogicVersion, opDefault()},
+		{0xa7, "b>=", opBytesGe, proto("bb:i"), LogicVersion, opDefault()},
+		{0xa8, "b==", opBytesEq, proto("bb:i"), LogicVersion, opDefault()},
+		{0xa9, "b!=", opBytesNeq, proto("bb:i"), LogicVersion, opDefault()},
+		{0xaa, "b%", opBytesModulo, proto("bb:b"), LogicVersion, costly(20)},
+		{0xab, "b|", opBytesBitOr, proto("bb:b"), LogicVersion, costly(6)},
+		{0xac, "b&", opBytesBitAnd, proto("bb:b"), LogicVersion, costly(6)},
+		{0xad, "b^", opBytesBitXor, proto("bb:b"), LogicVersion, costly(6)},
+		{0xae, "b~", opBytesBitNot, proto("b:b"), LogicVersion, costly(4)},
+		{0xaf, "bzero", opBytesZero, proto("i:b"), LogicVersion, opDefault()}}...),
 	// AVM "effects"
 	{0xb0, "log", opLog, proto("b:"), 5, only(modeApp)},
 	{0xb1, "itxn_begin", opTxBegin, proto(":"), 5, only(modeApp)},

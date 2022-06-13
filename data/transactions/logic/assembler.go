@@ -814,24 +814,46 @@ func asmBranch(ops *OpStream, spec *OpSpec, args []string) error {
 	}
 
 	ops.referToLabel(ops.pending.Len(), args[0])
-	ops.pending.WriteByte(spec.Opcode)
+	writeOp(ops, spec)
 	// zero bytes will get replaced with actual offset in resolveLabels()
 	ops.pending.WriteByte(0)
 	ops.pending.WriteByte(0)
 	return nil
 }
 
-func asmMulti(ops *OpStream, spec *OpSpec, args []string) error {
-	if len(args) < 1 {
-		return ops.errorf("%s expects a secondary name", spec.Name)
+func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, opcodes []byte, prevName string) (*OpSpec, []string, bool) {
+	var name string
+	var ok bool
+	if len(prevName) > 0 {
+		name = prevName + " " + spec.Name
+	} else {
+		name = spec.Name
 	}
-	for _, secondary := range spec.OpDetails.twoByteOps {
-		if args[0] == secondary.Name {
-			ops.pending.WriteByte(spec.Opcode)
-			return secondary.OpDetails.asm(ops, &secondary, args[1:])
+	for spec.ps != nil {
+		spec, ok = spec.ps(ops, spec, args[1:])
+		if !ok {
+			return nil, nil, false
 		}
 	}
-	return ops.errorf("No op found beginning with %s %s", spec.Name, args[0])
+	if len(spec.OpDetails.childOps) < 1 {
+		spec.Name = name
+		spec.fullMultiCode = append(opcodes, spec.Opcode)
+		return spec, args, true
+	}
+	if len(args) < 2 {
+		ops.errorf("%s expects a secondary name", name)
+		return nil, nil, false
+	}
+	for _, child := range spec.childOps {
+		if args[1] == child.Name {
+			if !spec.isDirectory {
+				opcodes = append(opcodes, spec.Opcode)
+			}
+			return traverseMultiFamily(ops, &child, args[1:], opcodes, name)
+		}
+	}
+	ops.errorf("No op found beginning with %s %s", name, args[1])
+	return nil, nil, false
 }
 
 func asmSubstring(ops *OpStream, spec *OpSpec, args []string) error {
@@ -938,6 +960,29 @@ func asmItxnField(ops *OpStream, spec *OpSpec, args []string) error {
 	return nil
 }
 
+func writeOp(ops *OpStream, spec *OpSpec) {
+	// Some assembly funcs like txn regrab a spec, so sadly we can't rely on the spec being marked properly
+	if spec.fullMultiCode != nil {
+		for _, b := range spec.fullMultiCode {
+			ops.pending.WriteByte(b)
+		}
+	} else {
+		ops.pending.WriteByte(spec.Opcode)
+	}
+}
+
+type pseduoFunc func(*OpStream, *OpSpec, []string) (*OpSpec, bool)
+
+// Common pseudo func pattern which determines the spec based on the number of immediates, i.e. i imms maps to the i'th child
+// Warning: Not safe to use if any of children are themselves multi/pseudo ops
+func psImmediateMap(ops *OpStream, spec *OpSpec, args []string) (*OpSpec, bool) {
+	if len(args)-1 > len(spec.childOps) {
+		ops.errorf("Too many immediates passed to %s", spec.Name)
+		return spec, false
+	}
+	return &spec.childOps[len(args)], true
+}
+
 type asmFunc func(*OpStream, *OpSpec, []string) error
 
 // Basic assembly. Any extra bytes of opcode are encoded as byte immediates.
@@ -949,7 +994,7 @@ func asmDefault(ops *OpStream, spec *OpSpec, args []string) error {
 		}
 		return ops.errorf("%s expects %d immediate arguments", spec.Name, expected)
 	}
-	ops.pending.WriteByte(spec.Opcode)
+	writeOp(ops, spec)
 	for i, imm := range spec.OpDetails.Immediates {
 		switch imm.kind {
 		case immByte:
@@ -1372,6 +1417,11 @@ func (ops *OpStream) assemble(text string) error {
 			ops.errorf("%s opcode was introduced in TEAL v%d", opstring, spec.Version)
 		}
 		if ok {
+			specP, fields, ok := traverseMultiFamily(ops, &spec, fields, nil, "")
+			if !ok {
+				continue
+			}
+			spec = *specP
 			ops.trace("%3d: %s\t", ops.sourceLine, opstring)
 			ops.recordSourceLine()
 			if spec.Modes == modeApp {
@@ -2239,6 +2289,29 @@ type disInfo struct {
 	hasStatefulOps bool
 }
 
+// Used in disassembly to parse multiOps
+// Pc returned is one less than actual b/c disassemble adds 1
+func getLeaf(program []byte, pc int, version uint64, root *OpSpec) (*OpSpec, int) {
+	if !isMultiOp(root) {
+		return root, pc
+	}
+	if pc >= len(program) {
+		return &OpSpec{Name: ""}, pc
+	}
+	for _, child := range root.childOps {
+		if child.Version > version {
+			continue
+		}
+		if child.isDirectory {
+			return getLeaf(program, pc, version, &child)
+		}
+		if child.Opcode == program[pc] {
+			return getLeaf(program, pc+1, version, &child)
+		}
+	}
+	return nil, pc
+}
+
 // disassembleInstrumented is like Disassemble, but additionally
 // returns where each program counter value maps in the
 // disassembly. If the labels names are known, they may be passed in.
@@ -2247,6 +2320,7 @@ func disassembleInstrumented(program []byte, labels map[int]string) (text string
 	out := strings.Builder{}
 	dis := disassembleState{program: program, out: &out, pendingLabels: labels}
 	version, vlen := binary.Uvarint(program)
+	var op *OpSpec
 	if vlen <= 0 {
 		fmt.Fprintf(dis.out, "// invalid version\n")
 		text = out.String()
@@ -2259,16 +2333,19 @@ func disassembleInstrumented(program []byte, labels map[int]string) (text string
 	}
 	fmt.Fprintf(dis.out, "#pragma version %d\n", version)
 	dis.pc = vlen
+
 	for dis.pc < len(program) {
 		err = dis.outputLabelIfNeeded()
 		if err != nil {
 			return
 		}
-		op := opsByOpcode[version][program[dis.pc]]
+		savedPc := dis.pc
+		op, dis.pc = getLeaf(program, dis.pc, version, &opsByOpcode[version][program[dis.pc]])
 		if op.Modes == modeApp {
 			ds.hasStatefulOps = true
 		}
 		if op.Name == "" {
+			dis.pc = savedPc
 			ds.pcOffset = append(ds.pcOffset, PCOffset{dis.pc, out.Len()})
 			msg := fmt.Sprintf("invalid opcode %02x at pc=%d", program[dis.pc], dis.pc)
 			out.WriteString(msg)
@@ -2283,7 +2360,7 @@ func disassembleInstrumented(program []byte, labels map[int]string) (text string
 
 		// Actually do the disassembly
 		var line string
-		line, err = disassemble(&dis, &op)
+		line, err = disassemble(&dis, op)
 		if err != nil {
 			return
 		}
