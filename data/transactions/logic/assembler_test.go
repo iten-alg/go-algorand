@@ -409,7 +409,7 @@ var compiled = map[uint64]string{
 	7: "07" + v7Compiled,
 }
 
-func pseudoOp(opcode string) bool {
+func isConstPseudoOp(opcode string) bool {
 	// We don't test every combination of
 	// intcblock,bytecblock,intc*,bytec*,arg* here.  Not all of
 	// these are truly pseudops, but it seems a good name.
@@ -438,7 +438,7 @@ func TestAssemble(t *testing.T) {
 			for _, spec := range OpSpecs {
 				// Make sure our nonsense covers the ops
 				if !strings.Contains(nonsense[v], spec.Name) &&
-					!pseudoOp(spec.Name) && spec.Version <= v {
+					!isConstPseudoOp(spec.Name) && spec.Version <= v {
 					t.Errorf("v%d nonsense test should contain op %v", v, spec.Name)
 				}
 			}

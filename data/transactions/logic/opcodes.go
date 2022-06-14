@@ -110,12 +110,14 @@ type OpDetails struct {
 	asm    asmFunc    // assemble the op
 	check  checkFunc  // static check bytecode (and determine size)
 	refine refineFunc // refine arg/return types based on ProgramKnowledge at assembly time
+	ps     pseudoFunc // Pseudo-ops use this to determine which spec to actually assemble
 
 	Modes runMode // all modes that opcode can run in. i.e (cx.mode & Modes) != 0 allows
 
 	FullCost   linearCost  // if non-zero, the cost of the opcode, no immediates matter
 	Size       int         // if non-zero, the known size of opcode. if 0, check() determines.
 	Immediates []immediate // details of each immediate arg to opcode
+	childOps   []OpSpec    // Set of possible specs that pseudo-op could assemble to
 }
 
 func (d *OpDetails) docCost() string {
@@ -162,11 +164,11 @@ func (d *OpDetails) Cost(program []byte, pc int, stack []stackValue) int {
 }
 
 func opDefault() OpDetails {
-	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil}
+	return OpDetails{asmDefault, nil, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil, nil}
 }
 
 func constants(asm asmFunc, checker checkFunc, name string, kind immKind) OpDetails {
-	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}}
+	return OpDetails{asm, checker, nil, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}, nil}
 }
 
 func opBranch() OpDetails {
@@ -176,6 +178,20 @@ func opBranch() OpDetails {
 	d.Size = 3
 	d.Immediates = []immediate{imm("target", immLabel)}
 	return d
+}
+
+// Without multicodes, we do not support pseudoOps pointing to other pseudoOps
+func pseudoOp(name string, ps pseudoFunc, version uint64, children ...OpSpec) (ret OpSpec) {
+	ret.Name = name
+	ret.childOps = children
+	ret.Version = version
+	ret.ps = ps
+	for _, child := range children {
+		if child.Version < ret.Version {
+			ret.Version = child.Version
+		}
+	}
+	return
 }
 
 func assembler(asm asmFunc) OpDetails {
@@ -439,13 +455,15 @@ var OpSpecs = []OpSpec{
 	// It is ok to have the same opcode for different TEAL versions.
 	// This 'txn' asm command supports additional argument in version 2 and
 	// generates 'txna' opcode in that particular case
-	{0x31, "txn", opTxn, proto(":a"), 2, field("f", &TxnFields).assembler(asmTxn2)},
 	{0x32, "global", opGlobal, proto(":a"), 1, field("f", &GlobalFields)},
 	{0x33, "gtxn", opGtxn, proto(":a"), 1, immediates("t", "f").field("f", &TxnScalarFields)},
 	{0x33, "gtxn", opGtxn, proto(":a"), 2, immediates("t", "f").field("f", &TxnFields).assembler(asmGtxn2)},
 	{0x34, "load", opLoad, proto(":a"), 1, immediates("i")},
 	{0x35, "store", opStore, proto("a:"), 1, immediates("i")},
-	{0x36, "txna", opTxna, proto(":a"), 2, immediates("f", "i").field("f", &TxnArrayFields)},
+	pseudoOp("txn", psImmediateMapOneOffset, 2, []OpSpec{
+		{0x31, "txn", opTxn, proto(":a"), 2, field("f", &TxnFields)},
+		{0x36, "txna", opTxna, proto(":a"), 2, immediates("f", "i").field("f", &TxnArrayFields)}}...,
+	),
 	{0x37, "gtxna", opGtxna, proto(":a"), 2, immediates("t", "f", "i").field("f", &TxnArrayFields)},
 	// Like gtxn, but gets txn index from stack, rather than immediate arg
 	{0x38, "gtxns", opGtxns, proto("i:a"), 3, immediates("f").field("f", &TxnFields).assembler(asmGtxns)},
@@ -620,6 +638,9 @@ func OpcodesByVersion(version uint64) []OpSpec {
 
 	subv := make(map[byte]OpSpec)
 	for idx := range OpSpecs {
+		if OpSpecs[idx].ps != nil {
+			continue
+		}
 		if OpSpecs[idx].Version <= version {
 			op := OpSpecs[idx].Opcode
 			subv[op] = OpSpecs[idx]
@@ -661,11 +682,12 @@ func init() {
 		if oi.Version == 1 {
 			cp := oi
 			cp.Version = 0
-			opsByOpcode[0][oi.Opcode] = cp
 			OpsByName[0][oi.Name] = cp
-
-			opsByOpcode[1][oi.Opcode] = oi
 			OpsByName[1][oi.Name] = oi
+			if oi.ps == nil {
+				opsByOpcode[0][oi.Opcode] = cp
+				opsByOpcode[1][oi.Opcode] = oi
+			}
 		}
 	}
 	// Start from v2 TEAL and higher,
@@ -678,15 +700,37 @@ func init() {
 			OpsByName[v][opName] = oi
 		}
 		for op, oi := range opsByOpcode[v-1] {
-			opsByOpcode[v][op] = oi
+			if oi.ps == nil {
+				opsByOpcode[v][op] = oi
+			}
 		}
 
 		// Update tables with opcodes from the current version
 		for _, oi := range OpSpecs {
 			if oi.Version == v {
-				opsByOpcode[v][oi.Opcode] = oi
+				if oi.ps == nil {
+					opsByOpcode[v][oi.Opcode] = oi
+				}
 				OpsByName[v][oi.Name] = oi
 			}
+		}
+	}
+	tempSpecs := make([]OpSpec, len(OpSpecs))
+	for _, spec := range OpSpecs {
+		if spec.ps != nil {
+			for v := spec.Version; v <= evalMaxVersion; v++ {
+				OpsByName[v][spec.Name] = spec
+			}
+			for _, child := range spec.childOps {
+				tempSpecs = append(tempSpecs, child)
+				for v := child.Version; v <= evalMaxVersion; v++ {
+					if opsByOpcode[v][child.Opcode].Version < child.Version {
+						opsByOpcode[v][child.Opcode] = child
+					}
+				}
+			}
+		} else {
+			tempSpecs = append(tempSpecs, spec)
 		}
 	}
 }

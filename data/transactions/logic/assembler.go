@@ -925,6 +925,22 @@ func asmItxnField(ops *OpStream, spec *OpSpec, args []string) error {
 	return nil
 }
 
+type pseudoFunc func(*OpStream, *OpSpec, []string) (*OpSpec, bool)
+
+// Common pseudo func pattern which determines the spec based on the number of immediates and offset, i.e. i imms maps to the (i-offset)'th child
+// Warning: Not safe to use if any of children are themselves multi/pseudo ops
+func psImmediateMap(ops *OpStream, spec *OpSpec, args []string, offset int) (*OpSpec, bool) {
+	if len(args)-1 > len(spec.childOps) {
+		ops.errorf("Too many immediates passed to %s", spec.Name)
+		return spec, false
+	}
+	return &spec.childOps[len(args)+offset], true
+}
+
+func psImmediateMapOneOffset(ops *OpStream, spec *OpSpec, args []string) (*OpSpec, bool) {
+	return psImmediateMap(ops, spec, args, 1)
+}
+
 type asmFunc func(*OpStream, *OpSpec, []string) error
 
 // Basic assembly. Any extra bytes of opcode are encoded as byte immediates.
@@ -1359,6 +1375,14 @@ func (ops *OpStream) assemble(text string) error {
 			ops.errorf("%s opcode was introduced in TEAL v%d", opstring, spec.Version)
 		}
 		if ok {
+			if spec.ps != nil {
+				specP := &spec
+				specP, ok = spec.ps(ops, specP, fields[1:])
+				spec = *specP
+				if !ok {
+					continue
+				}
+			}
 			ops.trace("%3d: %s\t", ops.sourceLine, opstring)
 			ops.recordSourceLine()
 			if spec.Modes == modeApp {
