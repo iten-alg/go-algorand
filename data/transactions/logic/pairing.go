@@ -171,10 +171,44 @@ func opBLS12381Add(cx *EvalContext) error {
 	}
 	a := bytesToBLS12381G1(aBytes)
 	b := bytesToBLS12381G1(bBytes)
-	// Should check to make sure gnark will put affine addition under the "Add" method
 	res := new(bls12381.G1Affine).Add(&a, &b)
 	resBytes := bls12381G1ToBytes(res)
 	cx.stack = cx.stack[:last]
 	cx.stack[prev].Bytes = resBytes
+	return nil
+}
+
+func opBLS12381ScalarMul(cx *EvalContext) error {
+	last := len(cx.stack) - 1
+	prev := last - 1
+	aBytes := cx.stack[prev].Bytes
+	if len(aBytes) != 64 {
+		return errors.New("expect G1 in 64 bytes")
+	}
+	a := bytesToBLS12381G1(aBytes)
+	kBytes := cx.stack[last].Bytes
+	// Overflow???
+	k := new(big.Int).SetBytes(kBytes[:])
+	res := new(bls12381.G1Affine).ScalarMultiplication(&a, k)
+	resBytes := bls12381G1ToBytes(res)
+	cx.stack = cx.stack[:last]
+	cx.stack[prev].Bytes = resBytes
+	return nil
+}
+
+func opBLS12381Pairing(cx *EvalContext) error {
+	last := len(cx.stack) - 1
+	prev := last - 1
+	g1Bytes := cx.stack[prev].Bytes
+	g2Bytes := cx.stack[last].Bytes
+	g1 := bytesToBLS12381G1s(g1Bytes)
+	g2 := bytesToBLS12381G2s(g2Bytes)
+	ok, err := bls12381.PairingCheck(g1, g2)
+	if err != nil {
+		return errors.New("pairing failed")
+	}
+	cx.stack = cx.stack[:last]
+	cx.stack[prev].Uint = boolToUint(ok)
+	cx.stack[prev].Bytes = nil
 	return nil
 }
