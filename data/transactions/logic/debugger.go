@@ -96,7 +96,7 @@ func GetProgramID(program []byte) string {
 }
 
 func makeDebugState(cx *EvalContext) *DebugState {
-	disasm, dsInfo, err := disassembleInstrumented(cx.program, nil)
+	disasm, dsInfo, err := disassembleInstrumented(cx.program, nil, false, false, false, nil, nil)
 	if err != nil {
 		// Report disassembly error as program text
 		disasm = err.Error()

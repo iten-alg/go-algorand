@@ -1775,7 +1775,7 @@ func TestDisassembleInt(t *testing.T) {
 	ops := testProg(t, txnSample, AssemblerMaxVersion)
 	disassembled, err := Disassemble(ops.Program)
 	require.NoError(t, err)
-	// Would ne nice to check that these appear in the
+	// Would be nice to check that these appear in the
 	// disassembled output in the right order, but I don't want to
 	// hardcode checks that they are in certain intc slots.
 	require.Contains(t, disassembled, "// 17")
@@ -1783,6 +1783,50 @@ func TestDisassembleInt(t *testing.T) {
 	require.Contains(t, disassembled, "pushint 37")
 	require.Contains(t, disassembled, "pushint 47")
 	require.Contains(t, disassembled, "pushint 5")
+}
+
+func TestDisassembleIntc(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	ops := testProg(t, "intcblock 0x01 0x02 0x03 0x04 0x05 0x06; intc_0; intc 5", AssemblerMaxVersion)
+	disassembled, err := Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 1")
+	require.Contains(t, disassembled, "// 6")
+	// Programs with only one intcblock should have comments with the indexed values regardless of when the intcblock shows up since intc ops can only be referencing it (though they can error)
+	ops = testProg(t, "pushint 0x08; b label2; label1:; intc_1; intc 6; b label3; label2:; intcblock 0x01 0x02 0x03 0x04 0x05 0x06 0x07; b label1; label3:; intc_0; intc 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 1")
+	require.Contains(t, disassembled, "// 6")
+	require.Contains(t, disassembled, "// 7")
+	require.Contains(t, disassembled, "// 2")
+	ops = testProg(t, "intcblock 0x01 0x02 0x03 0x04 0x05 0x06; intc_0; intc 4; intcblock 0x07 0x08 0x09 0xa 0xb 0xc; intc_1; intc 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.NotContains(t, disassembled, "//")
+}
+
+func TestDisassembleBytec(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	ops := testProg(t, "bytecblock 0x01 0x02 0x03 0x04 0x05 0x06; bytec_0; bytec 5", AssemblerMaxVersion)
+	disassembled, err := Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 0x01")
+	require.Contains(t, disassembled, "// 0x06")
+	// Programs with only one bytecblock should have comments with the indexed values regardless of when the bytecblock shows up since bytec ops can only be referencing it (though they can error)
+	ops = testProg(t, "pushbytes 0x08; b label2; label1:; bytec_1; bytec 6; b label3; label2:; bytecblock 0x01 0x02 0x03 0x04 0x05 0x06 0x07; b label1; label3:; bytec_0; bytec 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.Contains(t, disassembled, "// 0x01")
+	require.Contains(t, disassembled, "// 0x06")
+	require.Contains(t, disassembled, "// 0x07")
+	require.Contains(t, disassembled, "// 0x02")
+	ops = testProg(t, "bytecblock 0x01 0x02 0x03 0x04 0x05 0x06; bytec_0; bytec 4; bytecblock 0x07 0x08 0x09 0x0a 0x0b 0x0c; bytec_1; bytec 5", AssemblerMaxVersion)
+	disassembled, err = Disassemble(ops.Program)
+	require.NoError(t, err)
+	require.NotContains(t, disassembled, "//")
 }
 
 func TestDisassembleTxna(t *testing.T) {
@@ -2251,6 +2295,33 @@ func TestAssembleConstants(t *testing.T) {
 	}
 }
 
+func TestIntAndIntcBlock(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	progs := []string{"intcblock 0x01 0x02; int 0x04", "intcblock 0x01 0x02; int 0x02", "int 0x01; intcblock 0x01 0x02; int 0x02", "intcblock 0x02 0x03; int 0x02; int 0x04; int 0x0a; intcblock 0x04 0x0a; int 0x05; int 0x03; int 0x04"}
+	bytes := [][]byte{[]byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x81, 0x04}, []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x01, 0x02, 0x23}, []byte{byte(AssemblerMaxVersion), 0x81, 0x01, 0x20, 0x02, 0x01, 0x02, 0x81, 0x02}, []byte{byte(AssemblerMaxVersion), 0x20, 0x02, 0x02, 0x03, 0x81, 0x02, 0x81, 0x04, 0x81, 0x0a, 0x20, 0x02, 0x04, 0x0a, 0x81, 0x05, 0x81, 0x03, 0x81, 0x04}}
+	// Test 1: Assembler should use pushint on int pseudo-op after program manually created intcblock unless int is already in the block
+	// Test 2: If the int is already in the block, we might as well use the block, but only if it comes at the beginning of the program
+	// Test 3: If block does not come at beginning, we can't know when it will be run, so all int pseudo-ops turn into pushints
+	// Test 4: If multiple intcblocks, int now only acts as pushint
+	for i, _ := range progs {
+		// Additionally, we need to make sure terminating const blocks do not affect the previous bytes
+		prog := progs[i]
+		expected := bytes[i]
+		for j := 0; j < 3; j++ {
+			ops := testProg(t, prog, AssemblerMaxVersion)
+			require.Equal(t, expected, ops.Program)
+			prog += "; intcblock 0x01"
+			expected = append(expected, 0x20, 0x01, 0x01)
+		}
+		// Quick check for combo of bytecblock and intcblocks
+		prog += "; bytecblock 0x01"
+		expected = append(expected, 0x26, 0x01, 0x01, 0x01)
+		ops := testProg(t, prog, AssemblerMaxVersion)
+		require.Equal(t, expected, ops.Program)
+	}
+}
+
 func TestErrShortBytecblock(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
@@ -2265,6 +2336,29 @@ func TestErrShortBytecblock(t *testing.T) {
 	cx.program = ops.Program
 	err = checkIntConstBlock(&cx)
 	require.Equal(t, err, errShortIntcblock)
+}
+
+func TestPseudoByteAndBytecBlock(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	// Mirror of TestIntAndIntcBlock
+	progs := []string{"bytecblock 0x01 0x02; byte 0x04", "bytecblock 0x01 0x02; byte 0x02", "byte 0x01; bytecblock 0x01 0x02; byte 0x02", "bytecblock 0x02 0x03; byte 0x02; byte 0x04; byte 0x0a; bytecblock 0x04 0x0a; byte 0x05; byte 0x03; byte 0x04"}
+	bytes := [][]byte{[]byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x04}, []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x29}, []byte{byte(AssemblerMaxVersion), 0x80, 0x01, 0x01, 0x26, 0x02, 0x01, 0x01, 0x01, 0x02, 0x80, 0x01, 0x02}, []byte{byte(AssemblerMaxVersion), 0x26, 0x02, 0x01, 0x02, 0x01, 0x03, 0x80, 0x01, 0x02, 0x80, 0x01, 0x04, 0x80, 0x01, 0x0a, 0x26, 0x02, 0x01, 0x04, 0x01, 0x0a, 0x80, 0x01, 0x05, 0x80, 0x01, 0x03, 0x80, 0x01, 0x04}}
+	for i, _ := range progs {
+		prog := progs[i]
+		expected := bytes[i]
+		for j := 0; j < 3; j++ {
+			ops := testProg(t, prog, AssemblerMaxVersion)
+			require.Equal(t, expected, ops.Program)
+			prog += "; bytecblock 0x01"
+			expected = append(expected, 0x26, 0x01, 0x01, 0x01)
+		}
+		// Quick check for combo of bytecblock and intcblocks
+		prog += "; intcblock 0x01"
+		expected = append(expected, 0x20, 0x01, 0x01)
+		ops := testProg(t, prog, AssemblerMaxVersion)
+		require.Equal(t, expected, ops.Program)
+	}
 }
 
 func TestMethodWarning(t *testing.T) {
