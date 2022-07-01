@@ -821,28 +821,21 @@ func asmBranch(ops *OpStream, spec *OpSpec, args []string) error {
 	return nil
 }
 
-func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, opcodes []byte, prevName string) (*OpSpec, []string, bool) {
+func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, opcodes []byte, prevName string) (OpSpec, []string, bool) {
 	var name string
-	var ok bool
 	if len(prevName) > 0 {
 		name = prevName + " " + spec.Name
 	} else {
 		name = spec.Name
 	}
-	for spec.ps != nil {
-		spec, ok = spec.ps(ops, spec, args[1:])
-		if !ok {
-			return nil, nil, false
-		}
-	}
 	if len(spec.OpDetails.childOps) < 1 {
 		spec.Name = name
 		spec.fullMultiCode = append(opcodes, spec.Opcode)
-		return spec, args, true
+		return *spec, args, true
 	}
 	if len(args) < 2 {
 		ops.errorf("%s expects a secondary name", name)
-		return nil, nil, false
+		return OpSpec{}, nil, false
 	}
 	for _, child := range spec.childOps {
 		if args[1] == child.Name {
@@ -853,7 +846,7 @@ func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, opcodes []b
 		}
 	}
 	ops.errorf("No op found beginning with %s %s", name, args[1])
-	return nil, nil, false
+	return OpSpec{}, nil, false
 }
 
 func asmSubstring(ops *OpStream, spec *OpSpec, args []string) error {
@@ -969,18 +962,6 @@ func writeOp(ops *OpStream, spec *OpSpec) {
 	} else {
 		ops.pending.WriteByte(spec.Opcode)
 	}
-}
-
-type pseduoFunc func(*OpStream, *OpSpec, []string) (*OpSpec, bool)
-
-// Common pseudo func pattern which determines the spec based on the number of immediates, i.e. i imms maps to the i'th child
-// Warning: Not safe to use if any of children are themselves multi/pseudo ops
-func psImmediateMap(ops *OpStream, spec *OpSpec, args []string) (*OpSpec, bool) {
-	if len(args)-1 > len(spec.childOps) {
-		ops.errorf("Too many immediates passed to %s", spec.Name)
-		return spec, false
-	}
-	return &spec.childOps[len(args)], true
 }
 
 type asmFunc func(*OpStream, *OpSpec, []string) error
@@ -1417,11 +1398,10 @@ func (ops *OpStream) assemble(text string) error {
 			ops.errorf("%s opcode was introduced in TEAL v%d", opstring, spec.Version)
 		}
 		if ok {
-			specP, fields, ok := traverseMultiFamily(ops, &spec, fields, nil, "")
+			spec, fields, ok = traverseMultiFamily(ops, &spec, fields, nil, "")
 			if !ok {
 				continue
 			}
-			spec = *specP
 			ops.trace("%3d: %s\t", ops.sourceLine, opstring)
 			ops.recordSourceLine()
 			if spec.Modes == modeApp {
