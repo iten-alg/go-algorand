@@ -821,7 +821,7 @@ func asmBranch(ops *OpStream, spec *OpSpec, args []string) error {
 	return nil
 }
 
-func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, opcodes []byte, prevName string) (OpSpec, []string, bool) {
+func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, prevName string) (OpSpec, []string, bool) {
 	var name string
 	if len(prevName) > 0 {
 		name = prevName + " " + spec.Name
@@ -829,8 +829,7 @@ func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, opcodes []b
 		name = spec.Name
 	}
 	if len(spec.OpDetails.childOps) < 1 {
-		spec.Name = name
-		spec.fullMultiCode = append(opcodes, spec.Opcode)
+		spec.Name = spec.fullName
 		return *spec, args, true
 	}
 	if len(args) < 2 {
@@ -839,10 +838,7 @@ func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, opcodes []b
 	}
 	for _, child := range spec.childOps {
 		if args[1] == child.Name {
-			if !spec.isDirectory {
-				opcodes = append(opcodes, spec.Opcode)
-			}
-			return traverseMultiFamily(ops, &child, args[1:], opcodes, name)
+			return traverseMultiFamily(ops, &child, args[1:], name)
 		}
 	}
 	ops.errorf("No op found beginning with %s %s", name, args[1])
@@ -1398,7 +1394,7 @@ func (ops *OpStream) assemble(text string) error {
 			ops.errorf("%s opcode was introduced in TEAL v%d", opstring, spec.Version)
 		}
 		if ok {
-			spec, fields, ok = traverseMultiFamily(ops, &spec, fields, nil, "")
+			spec, fields, ok = traverseMultiFamily(ops, &spec, fields, "")
 			if !ok {
 				continue
 			}
@@ -1993,6 +1989,9 @@ func (dis *disassembleState) outputLabelIfNeeded() (err error) {
 // disassemble a single opcode at program[pc] according to spec
 func disassemble(dis *disassembleState, spec *OpSpec) (string, error) {
 	out := spec.Name
+	if spec.fullName != "" {
+		out = spec.fullName
+	}
 	pc := dis.pc + 1
 	for _, imm := range spec.OpDetails.Immediates {
 		out += " "
@@ -2276,14 +2275,18 @@ func getLeaf(program []byte, pc int, version uint64, root *OpSpec) (*OpSpec, int
 		return root, pc
 	}
 	if pc >= len(program) {
-		return &OpSpec{Name: ""}, pc
+		return nil, pc
 	}
 	for _, child := range root.childOps {
 		if child.Version > version {
 			continue
 		}
+
 		if child.isDirectory {
-			return getLeaf(program, pc, version, &child)
+			spec, nextPc := getLeaf(program, pc, version, &child)
+			if spec != nil {
+				return spec, nextPc
+			}
 		}
 		if child.Opcode == program[pc] {
 			return getLeaf(program, pc+1, version, &child)

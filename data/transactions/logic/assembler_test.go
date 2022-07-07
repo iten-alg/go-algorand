@@ -2450,6 +2450,20 @@ func TestBadInnerFields(t *testing.T) {
 	testProg(t, "itxn_begin; int 32; bzero; itxn_field TxID", 6, Expect{4, "...is not allowed."})
 }
 
+func TestMultiBytes(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	source := "pushbytes 0x01; pushbytes 0x02; b +"
+	program := strings.ReplaceAll(source, ";", "\n")
+	ops, err := AssembleStringWithVersion(program, 5)
+	if len(ops.Errors) > 0 || err != nil || ops == nil || ops.Program == nil {
+		t.Log(assemblyTrace(program, 5))
+	}
+	require.Empty(t, ops.Errors)
+	require.Equal(t, []byte{0x05, 0x80, 0x01, 0x01, 0x80, 0x01, 0x02, 0xa0, 0xa0}, ops.Program)
+	testProg(t, "pushbytes 0x01; pushbytes 0x02; b +", 5)
+}
+
 func TestTypeTracking(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()

@@ -181,10 +181,11 @@ func opBranch() OpDetails {
 	return d
 }
 
-func multiOp(dispatch byte, name string, isDirectory bool, children ...OpSpec) OpSpec {
+func multiOp(dispatch byte, name string, isDirectory bool, rootVersion uint64, children ...OpSpec) OpSpec {
 	ret := OpSpec{Opcode: dispatch, Name: name, OpDetails: opDefault()}
 	ret.childOps = children
 	ret.isDirectory = isDirectory
+	ret.Version = rootVersion
 	return ret
 }
 
@@ -591,23 +592,23 @@ var OpSpecs = []OpSpec{
 	{0xad, "b^", opBytesBitXor, proto("bb:b"), 4, costly(6)},
 	{0xae, "b~", opBytesBitNot, proto("b:b"), 4, costly(4)},
 	{0xaf, "bzero", opBytesZero, proto("i:b"), 4, opDefault()},
-	multiOp(0xa0, "b", false, []OpSpec{
-		{0xa0, "+", opBytesPlus, proto("bb:b"), LogicVersion, costly(10)},
-		{0xa1, "-", opBytesMinus, proto("bb:b"), LogicVersion, costly(10)},
-		{0xa2, "/", opBytesDiv, proto("bb:b"), LogicVersion, costly(20)},
-		{0xa3, "*", opBytesMul, proto("bb:b"), LogicVersion, costly(20)},
-		{0xa4, "<", opBytesLt, proto("bb:i"), LogicVersion, opDefault()},
-		{0xa5, ">", opBytesGt, proto("bb:i"), LogicVersion, opDefault()},
-		{0xa6, "<=", opBytesLe, proto("bb:i"), LogicVersion, opDefault()},
-		{0xa7, ">=", opBytesGe, proto("bb:i"), LogicVersion, opDefault()},
-		{0xa8, "==", opBytesEq, proto("bb:i"), LogicVersion, opDefault()},
-		{0xa9, "!=", opBytesNeq, proto("bb:i"), LogicVersion, opDefault()},
-		{0xaa, "%", opBytesModulo, proto("bb:b"), LogicVersion, costly(20)},
-		{0xab, "|", opBytesBitOr, proto("bb:b"), LogicVersion, costly(6)},
-		{0xac, "&", opBytesBitAnd, proto("bb:b"), LogicVersion, costly(6)},
-		{0xad, "^", opBytesBitXor, proto("bb:b"), LogicVersion, costly(6)},
-		{0xae, "~", opBytesBitNot, proto("b:b"), LogicVersion, costly(4)},
-		{0xaf, "zero", opBytesZero, proto("i:b"), LogicVersion, opDefault()}}...),
+	multiOp(0xa0, "b", false, 5, []OpSpec{
+		{0xa0, "+", opBytesPlus, proto("bb:b"), 5, costly(10)},
+		{0xa1, "-", opBytesMinus, proto("bb:b"), 5, costly(10)},
+		{0xa2, "/", opBytesDiv, proto("bb:b"), 5, costly(20)},
+		{0xa3, "*", opBytesMul, proto("bb:b"), 5, costly(20)},
+		{0xa4, "<", opBytesLt, proto("bb:i"), 5, opDefault()},
+		{0xa5, ">", opBytesGt, proto("bb:i"), 5, opDefault()},
+		{0xa6, "<=", opBytesLe, proto("bb:i"), 5, opDefault()},
+		{0xa7, ">=", opBytesGe, proto("bb:i"), 5, opDefault()},
+		{0xa8, "==", opBytesEq, proto("bb:i"), 5, opDefault()},
+		{0xa9, "!=", opBytesNeq, proto("bb:i"), 5, opDefault()},
+		{0xaa, "%", opBytesModulo, proto("bb:b"), 5, costly(20)},
+		{0xab, "|", opBytesBitOr, proto("bb:b"), 5, costly(6)},
+		{0xac, "&", opBytesBitAnd, proto("bb:b"), 5, costly(6)},
+		{0xad, "^", opBytesBitXor, proto("bb:b"), 5, costly(6)},
+		{0xae, "~", opBytesBitNot, proto("b:b"), 5, costly(4)},
+		{0xaf, "zero", opBytesZero, proto("i:b"), 5, opDefault()}}...),
 	// AVM "effects"
 	{0xb0, "log", opLog, proto("b:"), 5, only(modeApp)},
 	{0xb1, "itxn_begin", opTxBegin, proto(":"), 5, only(modeApp)},
@@ -688,9 +689,20 @@ var opsByOpcode [LogicVersion + 1][256]OpSpec
 var OpsByName [LogicVersion + 1]map[string]OpSpec
 
 func annotateMultiOp(spec *OpSpec, code []byte, name string) {
+	nextCode := append(code, spec.Opcode)
+	var nextName string
+	if name != "" {
+		nextName = name + " " + spec.Name
+	} else {
+		nextName = spec.Name
+	}
 	if spec.childOps == nil {
-		spec.fullMultiCode = append(code, spec.Opcode)
-		spec.fullName = name + spec.Name
+		spec.fullMultiCode = append(spec.fullMultiCode, nextCode...)
+		spec.fullName = nextName
+	} else {
+		for i := range spec.childOps {
+			annotateMultiOp(&spec.childOps[i], nextCode, nextName)
+		}
 	}
 }
 
@@ -705,7 +717,7 @@ func init() {
 	// Zero (empty) version is an alias for TEAL v1 opcodes and needed for compatibility with v1 code.
 	for i, spec := range OpSpecs {
 		if spec.childOps != nil {
-
+			annotateMultiOp(&OpSpecs[i], nil, "")
 		}
 	}
 	OpsByName[0] = make(map[string]OpSpec, 256)
