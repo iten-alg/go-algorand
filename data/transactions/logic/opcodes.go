@@ -802,6 +802,7 @@ var specNameToIndex map[string]int
 func init() {
 	// First, initialize baseline v1 opcodes.
 	// Zero (empty) version is an alias for TEAL v1 opcodes and needed for compatibility with v1 code.
+	specNameToIndex = make(map[string]int)
 	for i, spec := range OpSpecs {
 		other, ok := specNameToIndex[spec.Name]
 		if ok {

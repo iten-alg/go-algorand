@@ -896,7 +896,7 @@ func (cx *EvalContext) step() error {
 	spec, _ := getLeaf(cx.program, cx.pc, cx.version, &opsByOpcode[cx.version][opcode])
 
 	// this check also ensures TEAL versioning: v2 opcodes are not in opsByOpcode[1] array
-	if spec.op == nil {
+	if spec.op == nil || cx.version >= spec.DeprecatedVersion && spec.DeprecatedVersion > 0{
 		return fmt.Errorf("%3d illegal opcode 0x%02x", cx.pc, opcode)
 	}
 	if (cx.runModeFlags & spec.Modes) == 0 {
@@ -1045,7 +1045,7 @@ func (cx *EvalContext) checkStep() (int, error) {
 	cx.instructionStarts[cx.pc] = true
 	opcode := cx.program[cx.pc]
 	spec, _ := getLeaf(cx.program, cx.pc, cx.version, &opsByOpcode[cx.version][opcode])
-	if spec.op == nil {
+	if spec.op == nil || cx.version >= spec.DeprecatedVersion && spec.DeprecatedVersion > 0{
 		return 0, fmt.Errorf("illegal opcode 0x%02x", opcode)
 	}
 	if (cx.runModeFlags & spec.Modes) == 0 {
