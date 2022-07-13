@@ -893,7 +893,7 @@ func (cx *EvalContext) remainingInners() int {
 
 func (cx *EvalContext) step() error {
 	opcode := cx.program[cx.pc]
-	spec := &opsByOpcode[cx.version][opcode]
+	spec, _ := getLeaf(cx.program, cx.pc, cx.version, &opsByOpcode[cx.version][opcode])
 
 	// this check also ensures TEAL versioning: v2 opcodes are not in opsByOpcode[1] array
 	if spec.op == nil {
@@ -1044,7 +1044,7 @@ var blankStack = make([]stackValue, 5)
 func (cx *EvalContext) checkStep() (int, error) {
 	cx.instructionStarts[cx.pc] = true
 	opcode := cx.program[cx.pc]
-	spec := &opsByOpcode[cx.version][opcode]
+	spec, _ := getLeaf(cx.program, cx.pc, cx.version, &opsByOpcode[cx.version][opcode])
 	if spec.op == nil {
 		return 0, fmt.Errorf("illegal opcode 0x%02x", opcode)
 	}

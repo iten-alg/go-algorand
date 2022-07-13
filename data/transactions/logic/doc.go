@@ -357,7 +357,10 @@ func OpAllCosts(opName string) []VerCost {
 	for v := 1; v <= LogicVersion; v++ {
 		spec, ok := OpsByName[v][opName]
 		if !ok {
-			continue
+			spec, ok = getMultiLeafByName(opName, uint64(v))
+			if !ok {
+				continue
+			}
 		}
 		argLen := len(spec.Arg.Types)
 		cost := spec.OpDetails.docCost(argLen)

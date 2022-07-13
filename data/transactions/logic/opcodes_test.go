@@ -17,6 +17,7 @@
 package logic
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"testing"
@@ -87,8 +88,9 @@ func TestOpcodesByVersion(t *testing.T) {
 
 func testOpcodesByVersion(t *testing.T) {
 	// Make a copy of the OpSpecs to check if OpcodesByVersion will change it
-	OpSpecs2 := make([]OpSpec, len(OpSpecs))
+	OpSpecs2 := make([]OpSpec, 256)
 	for idx, opspec := range OpSpecs {
+		// Assuming we don't need cp but should check
 		cp := opspec
 		OpSpecs2[idx] = cp
 	}
@@ -102,7 +104,7 @@ func testOpcodesByVersion(t *testing.T) {
 				cur := opSpecs[v-1][i]
 				next := opSpecs[v-1][i+1]
 				// check duplicates
-				if cur.Opcode == next.Opcode {
+				if cur.Opcode == next.Opcode && bytes.Equal(cur.fullMultiCode, next.fullMultiCode) {
 					isOk = false
 					break
 				}
@@ -111,6 +113,7 @@ func testOpcodesByVersion(t *testing.T) {
 					isOk = false
 					break
 				}
+				// Could duplicate code to check multicode sorting, but not sure what the duplication accomplishes
 
 			}
 			require.True(t, isOk)

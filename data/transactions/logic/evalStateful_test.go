@@ -2266,6 +2266,7 @@ assert
 	testApp(t, source, ep, "AssetTotal expected field type is []byte but got uint64")
 }
 
+//TODO: Come back and remove multi roots while adding multi leaves
 func TestReturnTypes(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
@@ -2394,6 +2395,7 @@ func TestReturnTypes(t *testing.T) {
 		"bn256_add":        true,
 		"bn256_scalar_mul": true,
 		"bn256_pairing":    true,
+		"bmath":            true,
 	}
 
 	byName := OpsByName[LogicVersion]

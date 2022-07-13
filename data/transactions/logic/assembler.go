@@ -828,7 +828,7 @@ func asmBranch(ops *OpStream, spec *OpSpec, args []string) error {
 	}
 
 	ops.referToLabel(ops.pending.Len(), args[0])
-	ops.pending.WriteByte(spec.Opcode)
+	writeOp(ops, spec)
 	// zero bytes will get replaced with actual offset in resolveLabels()
 	ops.pending.WriteByte(0)
 	ops.pending.WriteByte(0)
@@ -847,6 +847,16 @@ func asmSubstring(ops *OpStream, spec *OpSpec, args []string) error {
 		return ops.error("substring end is before start")
 	}
 	return nil
+}
+
+func writeOp(ops *OpStream, spec *OpSpec) {
+	if spec.fullMultiCode != nil {
+		for _, b := range spec.fullMultiCode {
+			ops.pending.WriteByte(b)
+		}
+	} else {
+		ops.pending.WriteByte(spec.Opcode)
+	}
 }
 
 func simpleImm(value string, label string) (byte, error) {
@@ -924,7 +934,7 @@ func asmDefault(ops *OpStream, spec *OpSpec, args []string) error {
 		}
 		return ops.errorf("%s expects %d immediate arguments", spec.Name, expected)
 	}
-	ops.pending.WriteByte(spec.Opcode)
+	writeOp(ops, spec)
 	for i, imm := range spec.OpDetails.Immediates {
 		switch imm.kind {
 		case immByte:
@@ -1181,6 +1191,34 @@ func pseudoImmediatesError(ops *OpStream, name string, specs map[int]OpSpec) {
 	ops.error(errMsg)
 }
 
+func traverseMultiFamily(ops *OpStream, spec *OpSpec, args []string, prevName string) (OpSpec, []string, bool) {
+	var name string
+	if len(prevName) > 0 {
+		name = prevName + " " + spec.Name
+	} else {
+		name = spec.Name
+	}
+	if len(spec.OpDetails.childOps) < 1 {
+		if spec.FullName != "" {
+			spec.Name = spec.FullName
+		}
+		return *spec, args, true
+	}
+	if len(args) < 2 && ops != nil {
+		ops.errorf("%s expects a secondary name", name)
+		return OpSpec{}, nil, false
+	}
+	for _, child := range spec.childOps {
+		if args[1] == child.Name {
+			return traverseMultiFamily(ops, &child, args[1:], name)
+		}
+	}
+	if ops != nil {
+		ops.errorf("No op found beginning with %s %s", name, args[1])
+	}
+	return OpSpec{}, nil, false
+}
+
 // getSpec finds the OpSpec we need during assembly based on it's name, our current version, and the immediates passed in
 // Note getSpec handles both normal OpSpecs and those supplied by versionedPseudoOps
 func getSpec(ops *OpStream, name string, args []string) (OpSpec, bool) {
@@ -1233,6 +1271,22 @@ var pseudoOps = map[string]map[int]OpSpec{
 	"method": {anyImmediates: OpSpec{Name: "method", Version: 1, Proto: proto(":b"), OpDetails: assembler(asmMethod)}},
 	"txn":    {1: OpSpec{Name: "txn"}, 2: OpSpec{Name: "txna"}},
 	"gtxn":   {2: OpSpec{Name: "gtxn"}, 3: OpSpec{Name: "gtxna"}},
+	"b+":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath +"}}},
+	"b-":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath -"}}},
+	"b/":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath /"}}},
+	"b*":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath *"}}},
+	"b<":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath <"}}},
+	"b>":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath >"}}},
+	"b<=":    {0: OpSpec{OpDetails: OpDetails{FullName: "bmath <="}}},
+	"b>=":    {0: OpSpec{OpDetails: OpDetails{FullName: "bmath >="}}},
+	"b==":    {0: OpSpec{OpDetails: OpDetails{FullName: "bmath =="}}},
+	"b!=":    {0: OpSpec{OpDetails: OpDetails{FullName: "bmath !="}}},
+	"b%":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath %"}}},
+	"b|":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath |"}}},
+	"b&":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath &"}}},
+	"b^":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath ^"}}},
+	"b~":     {0: OpSpec{OpDetails: OpDetails{FullName: "bmath ~"}}},
+	"bzero":  {0: OpSpec{OpDetails: OpDetails{FullName: "bmath zero"}}},
 }
 
 func addPseudoDocTags() {
@@ -1242,17 +1296,24 @@ func addPseudoDocTags() {
 				continue
 			}
 			msg := ""
+			msgName := spec.Name
+			if spec.FullName != "" {
+				msgName = spec.FullName
+			}
 			switch {
 			case i > 1:
-				msg = fmt.Sprintf("%s can be called using %s with %d immediates.", spec.Name, name, i)
+				msg = fmt.Sprintf("%s can be called using %s with %d immediates.", msgName, name, i)
 			case i == 1:
-				msg = fmt.Sprintf("%s can be called using %s with %d immediate.", spec.Name, name, i)
+				msg = fmt.Sprintf("%s can be called using %s with %d immediate.", msgName, name, i)
 			case i == 0:
-				msg = fmt.Sprintf("%s can be called using %s without immediates.", spec.Name, name)
+				msg = fmt.Sprintf("%s can be called using %s without immediates.", msgName, name)
 			default:
 				continue
 			}
 			desc, ok := opDocByName[spec.Name]
+			if len(specs) == 1 && spec.FullName != "" {
+				opDocByName[spec.FullName] = desc + "<br />" + msg
+			}
 			if ok {
 				opDocByName[spec.Name] = desc + "<br />" + msg
 			} else {
@@ -1301,21 +1362,58 @@ func mergeProtos(specs map[int]OpSpec) (Proto, uint64, bool) {
 	return Proto{typedList{args, ""}, typedList{returns, ""}}, minVersion, true
 }
 
+func getMultiLeafByName(name string, version uint64) (OpSpec, bool) {
+	// We don't need to be super careful here b/c we only use on entries in pseudo-table
+	fields := strings.Fields(name)
+	root, ok := OpsByName[version][fields[0]]
+	var wrongVersion bool
+	if !ok {
+		root, ok = OpsByName[AssemblerMaxVersion][fields[0]]
+		if !ok {
+			return OpSpec{}, false
+		}
+		wrongVersion = true
+	}
+	leaf, _, ok := traverseMultiFamily(nil, &root, fields, "")
+	if leaf.Version > version || wrongVersion {
+		// We still want the spec if the version's wrong
+		return leaf, false
+	}
+	return leaf, ok
+}
+
 func prepareVersionedPseudoTable(version uint64) map[string]map[int]OpSpec {
 	m := make(map[string]map[int]OpSpec)
+	var leafSpec OpSpec
 	for name, specs := range pseudoOps {
 		m[name] = make(map[int]OpSpec)
 		for numImmediates, spec := range specs {
+			lookupName := spec.Name
 			if spec.Version != 0 {
 				// If a version is specified, then we assume it is a custom spec
 				m[name][numImmediates] = spec
 				continue
 			}
-			newSpec, ok := OpsByName[version][spec.Name]
+			if spec.FullName != "" {
+				var ok bool
+				leafSpec, ok = getMultiLeafByName(spec.FullName, version)
+				if ok {
+					m[name][numImmediates] = leafSpec
+					continue
+				}
+				// If not ok, it's possible the multi-op replaced a normal spec,
+				// so we go look for a normal spec matching our version
+				lookupName = name
+			}
+			newSpec, ok := OpsByName[version][lookupName]
 			if ok {
 				m[name][numImmediates] = newSpec
 			} else {
-				m[name][numImmediates] = OpsByName[AssemblerMaxVersion][spec.Name]
+				if spec.FullName != "" {
+					m[name][numImmediates] = leafSpec
+				} else {
+					m[name][numImmediates] = OpsByName[AssemblerMaxVersion][lookupName]
+				}
 			}
 		}
 	}
@@ -1526,6 +1624,10 @@ func (ops *OpStream) assemble(text string) error {
 			opstring = fields[0]
 		}
 		spec, ok := getSpec(ops, opstring, fields[1:])
+		spec, fields, ok = traverseMultiFamily(ops, &spec, fields, "")
+		if !ok {
+			continue
+		}
 		if ok {
 			ops.trace("%3d: %s\t", ops.sourceLine, opstring)
 			ops.recordSourceLine()
@@ -2107,6 +2209,9 @@ func (dis *disassembleState) outputLabelIfNeeded() (err error) {
 // disassemble a single opcode at program[pc] according to spec
 func disassemble(dis *disassembleState, spec *OpSpec) (string, error) {
 	out := spec.Name
+	if spec.FullName != "" {
+		out = spec.FullName
+	}
 	pc := dis.pc + 1
 	for _, imm := range spec.OpDetails.Immediates {
 		out += " "
@@ -2383,6 +2488,32 @@ type disInfo struct {
 	hasStatefulOps bool
 }
 
+// Used in disassembly to parse multiOps
+// Pc returned is one less than actual b/c disassemble adds 1
+func getLeaf(program []byte, pc int, version uint64, root *OpSpec) (*OpSpec, int) {
+	if !isMultiOp(root) {
+		return root, pc
+	}
+	if pc >= len(program)-1 {
+		return nil, pc
+	}
+	for _, child := range root.childOps {
+		if child.Version > version {
+			continue
+		}
+		if child.isDirectory {
+			spec, nextPc := getLeaf(program, pc, version, &child)
+			if spec != nil {
+				return spec, nextPc
+			}
+		}
+		if child.Opcode == program[pc+1] {
+			return getLeaf(program, pc+1, version, &child)
+		}
+	}
+	return nil, pc
+}
+
 // disassembleInstrumented is like Disassemble, but additionally
 // returns where each program counter value maps in the
 // disassembly. If the labels names are known, they may be passed in.
@@ -2391,6 +2522,7 @@ func disassembleInstrumented(program []byte, labels map[int]string) (text string
 	out := strings.Builder{}
 	dis := disassembleState{program: program, out: &out, pendingLabels: labels}
 	version, vlen := binary.Uvarint(program)
+	var op *OpSpec
 	if vlen <= 0 {
 		fmt.Fprintf(dis.out, "// invalid version\n")
 		text = out.String()
@@ -2408,11 +2540,13 @@ func disassembleInstrumented(program []byte, labels map[int]string) (text string
 		if err != nil {
 			return
 		}
-		op := opsByOpcode[version][program[dis.pc]]
+		savedPc := dis.pc
+		op, dis.pc = getLeaf(program, dis.pc, version, &opsByOpcode[version][program[dis.pc]])
 		if op.Modes == modeApp {
 			ds.hasStatefulOps = true
 		}
 		if op.Name == "" {
+			dis.pc = savedPc
 			ds.pcOffset = append(ds.pcOffset, PCOffset{dis.pc, out.Len()})
 			msg := fmt.Sprintf("invalid opcode %02x at pc=%d", program[dis.pc], dis.pc)
 			out.WriteString(msg)
@@ -2427,7 +2561,7 @@ func disassembleInstrumented(program []byte, labels map[int]string) (text string
 
 		// Actually do the disassembly
 		var line string
-		line, err = disassemble(&dis, &op)
+		line, err = disassemble(&dis, op)
 		if err != nil {
 			return
 		}

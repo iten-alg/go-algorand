@@ -168,16 +168,19 @@ func stackMarkdown(op *logic.OpSpec) string {
 
 func opToMarkdown(out io.Writer, op *logic.OpSpec, groupDocWritten map[string]bool) (err error) {
 	ws := ""
-	opextra := logic.OpImmediateNote(op.Name)
+	name := logic.GetFullName(*op)
+	opextra := logic.OpImmediateNote(name)
 	if opextra != "" {
 		ws = " "
 	}
 	stackEffects := stackMarkdown(op)
-	fmt.Fprintf(out, "\n## %s%s\n\n- Opcode: 0x%02x%s%s\n%s",
-		op.Name, immediateMarkdown(op), op.Opcode, ws, opextra, stackEffects)
-	fmt.Fprintf(out, "- %s\n", logic.OpDoc(op.Name))
+	code := logic.GetFullCode(*op)
+
+	fmt.Fprintf(out, "\n## %s%s\n\n- Opcode: 0x%0x%s%s\n%s",
+		name, immediateMarkdown(op), code, ws, opextra, stackEffects)
+	fmt.Fprintf(out, "- %s\n", logic.OpDoc(name))
 	// if cost changed with versions print all of them
-	costs := logic.OpAllCosts(op.Name)
+	costs := logic.OpAllCosts(name)
 	if len(costs) > 1 {
 		fmt.Fprintf(out, "- **Cost**:\n")
 		for _, cost := range costs {
@@ -198,7 +201,12 @@ func opToMarkdown(out io.Writer, op *logic.OpSpec, groupDocWritten map[string]bo
 		}
 	}
 	if op.Version > 1 {
+		if op.DeprecatedVersion > 1 {
+			fmt.Fprintf(out, "- Availability: v%d-v%d", op.Version, op.DeprecatedVersion-1)
+		}
 		fmt.Fprintf(out, "- Availability: v%d\n", op.Version)
+	} else if op.DeprecatedVersion > 1 {
+		fmt.Fprintf(out, "- Deprecated from v%d\n on", op.DeprecatedVersion)
 	}
 	if !op.Modes.Any() {
 		fmt.Fprintf(out, "- Mode: %s\n", op.Modes)

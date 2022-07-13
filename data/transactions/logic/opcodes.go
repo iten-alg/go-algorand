@@ -117,9 +117,15 @@ type OpDetails struct {
 
 	Modes runMode // all modes that opcode can run in. i.e (cx.mode & Modes) != 0 allows
 
-	FullCost   linearCost  // if non-zero, the cost of the opcode, no immediates matter
-	Size       int         // if non-zero, the known size of opcode. if 0, check() determines.
-	Immediates []immediate // details of each immediate arg to opcode
+	FullCost          linearCost  // if non-zero, the cost of the opcode, no immediates matter
+	Size              int         // if non-zero, the known size of opcode. if 0, check() determines.
+	Immediates        []immediate // details of each immediate arg to opcode
+	childOps          []OpSpec
+	fullMultiCode     []byte
+	FullName          string // Used for leaf multiOps to know their names for documentation
+	isDirectory       bool
+	DeprecatedVersion uint64 // Only considered deprecated if replaced by something with irreconcilable differences like a multi-op
+	Deprecates        string
 }
 
 func (d *OpDetails) docCost(argLen int) string {
@@ -166,11 +172,11 @@ func (d *OpDetails) Cost(program []byte, pc int, stack []stackValue) int {
 }
 
 func opDefault() OpDetails {
-	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil}
+	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil, nil, nil, "", false, 0, ""}
 }
 
 func constants(asm asmFunc, checker checkFunc, name string, kind immKind) OpDetails {
-	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}}
+	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}, nil, nil, "", false, 0, ""}
 }
 
 func opBranch() OpDetails {
@@ -180,6 +186,29 @@ func opBranch() OpDetails {
 	d.Size = 3
 	d.Immediates = []immediate{imm("target", immLabel)}
 	return d
+}
+
+func multiOp(dispatch byte, name string, isDirectory bool, rootVersion uint64, children ...OpSpec) OpSpec {
+	ret := OpSpec{Opcode: dispatch, Name: name, OpDetails: opDefault()}
+	ret.childOps = children
+	ret.isDirectory = isDirectory
+	ret.Version = rootVersion
+	return ret
+}
+
+func isMultiOp(spec *OpSpec) bool {
+	return spec.childOps != nil
+}
+
+func getLeafSpecs(spec *OpSpec) []OpSpec {
+	if spec.childOps == nil {
+		return []OpSpec{*spec}
+	}
+	specs := make([]OpSpec, 0)
+	for _, child := range spec.childOps {
+		specs = append(specs, getLeafSpecs(&child)...)
+	}
+	return specs
 }
 
 func assembler(asm asmFunc) OpDetails {
@@ -570,6 +599,24 @@ var OpSpecs = []OpSpec{
 	{0xad, "b^", opBytesBitXor, proto("bb:b"), 4, costly(6)},
 	{0xae, "b~", opBytesBitNot, proto("b:b"), 4, costly(4)},
 	{0xaf, "bzero", opBytesZero, proto("i:b"), 4, opDefault()},
+	multiOp(0xa0, "bmath", false, pairingVersion, []OpSpec{
+		{0xa0, "+", opBytesPlus, proto("bb:b"), pairingVersion, costly(10)},
+		{0xa1, "-", opBytesMinus, proto("bb:b"), pairingVersion, costly(10)},
+		{0xa2, "/", opBytesDiv, proto("bb:b"), pairingVersion, costly(20)},
+		{0xa3, "*", opBytesMul, proto("bb:b"), pairingVersion, costly(20)},
+		{0xa4, "<", opBytesLt, proto("bb:i"), pairingVersion, opDefault()},
+		{0xa5, ">", opBytesGt, proto("bb:i"), pairingVersion, opDefault()},
+		{0xa6, "<=", opBytesLe, proto("bb:i"), pairingVersion, opDefault()},
+		{0xa7, ">=", opBytesGe, proto("bb:i"), pairingVersion, opDefault()},
+		{0xa8, "==", opBytesEq, proto("bb:i"), pairingVersion, opDefault()},
+		{0xa9, "!=", opBytesNeq, proto("bb:i"), pairingVersion, opDefault()},
+		{0xaa, "%", opBytesModulo, proto("bb:b"), pairingVersion, costly(20)},
+		{0xab, "|", opBytesBitOr, proto("bb:b"), pairingVersion, costly(6)},
+		{0xac, "&", opBytesBitAnd, proto("bb:b"), pairingVersion, costly(6)},
+		{0xad, "^", opBytesBitXor, proto("bb:b"), pairingVersion, costly(6)},
+		{0xae, "~", opBytesBitNot, proto("b:b"), pairingVersion, costly(4)},
+		{0xaf, "zero", opBytesZero, proto("i:b"), pairingVersion, opDefault()}}...,
+	),
 
 	// AVM "effects"
 	{0xb0, "log", opLog, proto("b:"), 5, only(modeApp)},
@@ -594,9 +641,31 @@ var OpSpecs = []OpSpec{
 
 type sortByOpcode []OpSpec
 
-func (a sortByOpcode) Len() int           { return len(a) }
-func (a sortByOpcode) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a sortByOpcode) Less(i, j int) bool { return a[i].Opcode < a[j].Opcode }
+func (a sortByOpcode) Len() int      { return len(a) }
+func (a sortByOpcode) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a sortByOpcode) Less(i, j int) bool {
+	if a[i].Opcode != a[j].Opcode {
+		return a[i].Opcode < a[j].Opcode
+	}
+	if !isMultiOp(&a[i]) {
+		return true
+	}
+	if !isMultiOp(&a[j]) {
+		return false
+	}
+	// Both are multiOps
+	for k := range a[i].fullMultiCode[1:] {
+		if len(a[j].fullMultiCode[1:]) == k {
+			// Should never happen, but leaving this here for discussion
+			return false
+		}
+		if a[i].fullMultiCode[1:][k] != a[j].fullMultiCode[1:][k] {
+			return a[i].fullMultiCode[1:][k] < a[j].fullMultiCode[1:][k]
+		}
+	}
+	// Again should never happen
+	return true
+}
 
 // OpcodesByVersion returns list of opcodes available in a specific version of TEAL
 // by copying v1 opcodes to v2, and then on to v3 to create a full list
@@ -622,17 +691,34 @@ func OpcodesByVersion(version uint64) []OpSpec {
 		updated[op] = cv
 	}
 
-	subv := make(map[byte]OpSpec)
+	subv := make(map[string]OpSpec)
 	for idx := range OpSpecs {
 		if OpSpecs[idx].Version <= version {
-			op := OpSpecs[idx].Opcode
-			subv[op] = OpSpecs[idx]
-			// if the opcode was updated then assume backward compatibility
-			// and set version to minimum available
-			if updated[op] < int(OpSpecs[idx].Version) {
-				copy := OpSpecs[idx]
-				copy.Version = uint64(updated[op])
-				subv[op] = copy
+			if isMultiOp(&OpSpecs[idx]) {
+				leaves := getLeafSpecs(&OpSpecs[idx])
+				for _, leaf := range leaves {
+					codeString := fmt.Sprintf("%0x", leaf.fullMultiCode)
+					current, ok := subv[fmt.Sprintf("%0x", leaf.fullMultiCode)]
+					if ok {
+						if current.Version < leaf.Version {
+							leaf.Version = current.Version
+							subv[codeString] = leaf
+						}
+					} else {
+						subv[codeString] = leaf
+					}
+				}
+
+			} else {
+				op := OpSpecs[idx].Opcode
+				subv[fmt.Sprintf("%0x", op)] = OpSpecs[idx]
+				// if the opcode was updated then assume backward compatibility
+				// and set version to minimum available
+				if updated[op] < int(OpSpecs[idx].Version) {
+					copy := OpSpecs[idx]
+					copy.Version = uint64(updated[op])
+					subv[fmt.Sprintf("%0x", op)] = copy
+				}
 			}
 		}
 	}
@@ -650,6 +736,63 @@ var opsByOpcode [LogicVersion + 1][256]OpSpec
 // OpsByName map for each version, mapping opcode name to OpSpec
 var OpsByName [LogicVersion + 1]map[string]OpSpec
 
+var totalOps int
+
+func annotateMultiOp(spec *OpSpec, code []byte, name string) {
+	nextCode := code
+	if !spec.isDirectory {
+		nextCode = append(code, spec.Opcode)
+	}
+	var nextName string
+	if name != "" {
+		nextName = name + " " + spec.Name
+	} else {
+		nextName = spec.Name
+	}
+	if spec.childOps == nil {
+		if spec.Deprecates != "" {
+			idx := specNameToIndex[spec.Deprecates]
+			OpSpecs[idx].DeprecatedVersion = spec.Version
+		}
+		totalOps++
+		spec.fullMultiCode = append(spec.fullMultiCode, nextCode...)
+		spec.FullName = nextName
+		extraBytes := len(spec.fullMultiCode) - 1
+		if spec.Size == 0 {
+			spec.check = func(cx *EvalContext) error {
+				cx.pc += extraBytes
+				return spec.check(cx)
+			}
+			spec.op = func(cx *EvalContext) error {
+				cx.pc += extraBytes
+				return spec.op(cx)
+			}
+		} else {
+			spec.Size += extraBytes
+		}
+	} else {
+		for i := range spec.childOps {
+			annotateMultiOp(&spec.childOps[i], nextCode, nextName)
+		}
+	}
+}
+
+func GetFullCode(spec OpSpec) []byte {
+	if spec.fullMultiCode != nil {
+		return spec.fullMultiCode
+	}
+	return []byte{spec.Opcode}
+}
+
+func GetFullName(spec OpSpec) string {
+	if spec.FullName != "" {
+		return spec.FullName
+	}
+	return spec.Name
+}
+
+var specNameToIndex map[string]int
+
 // Migration from TEAL v1 to TEAL v2.
 // TEAL v1 allowed execution of program with version 0.
 // With TEAL v2 opcode versions are introduced and they are bound to every opcode.
@@ -659,6 +802,23 @@ var OpsByName [LogicVersion + 1]map[string]OpSpec
 func init() {
 	// First, initialize baseline v1 opcodes.
 	// Zero (empty) version is an alias for TEAL v1 opcodes and needed for compatibility with v1 code.
+	for i, spec := range OpSpecs {
+		other, ok := specNameToIndex[spec.Name]
+		if ok {
+			if spec.Version > OpSpecs[other].Version {
+				specNameToIndex[spec.Name] = i
+			}
+		} else {
+			specNameToIndex[spec.Name] = i
+		}
+	}
+	for i, spec := range OpSpecs {
+		if spec.childOps != nil {
+			annotateMultiOp(&OpSpecs[i], nil, "")
+		} else {
+			totalOps++
+		}
+	}
 	OpsByName[0] = make(map[string]OpSpec, 256)
 	OpsByName[1] = make(map[string]OpSpec, 256)
 	for _, oi := range OpSpecs {

@@ -28,9 +28,10 @@ import (
 func TestOpDocs(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
-	opsSeen := make(map[string]bool, len(OpSpecs))
+	opsSeen := make(map[string]bool, totalOps)
 	for _, op := range OpSpecs {
-		opsSeen[op.Name] = false
+		name := GetFullName(op)
+		opsSeen[name] = false
 	}
 	for name := range opDocByName {
 		assert.Contains(t, opsSeen, name, "opDocByName contains strange opcode %#v", name)
