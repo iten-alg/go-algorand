@@ -250,6 +250,8 @@ type OpStream struct {
 
 	// Need new copy for each opstream
 	versionedPseudoOps map[string]map[int]OpSpec
+
+	macros map[string][]string
 }
 
 // newOpStream constructs OpStream instances ready to invoke assemble. A new
@@ -260,6 +262,7 @@ func newOpStream(version uint64) OpStream {
 		OffsetToLine: make(map[int]int),
 		typeTracking: true,
 		Version:      version,
+		macros:       make(map[string][]string),
 	}
 
 	for i := range o.known.scratchSpace {
@@ -1544,8 +1547,21 @@ func (ops *OpStream) trackStack(args StackTypes, returns StackTypes, instruction
 
 // processFields breaks fields into a slice of tokens up to the first
 // semi-colon, and the rest.
-func processFields(fields []string) (current, rest []string) {
-	for i, field := range fields {
+func processFields(ops *OpStream, fields []string) (current, rest []string) {
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		if len(field) > 0 && string(field[0]) == "#" {
+			directive := field[1:]
+			if directive == "pragma" {
+
+			}
+		}
+		replacement, ok := ops.macros[field]
+		if ok {
+			fields = append(fields[0:i], append(replacement, fields[i+1:]...)...)
+			i--
+			continue
+		}
 		if field == ";" {
 			return fields[:i], fields[i+1:]
 		}
@@ -1568,7 +1584,19 @@ func (ops *OpStream) assemble(text string) error {
 			continue
 		}
 		fields := fieldsFromLine(line)
-		for current, next := processFields(fields); len(current) > 0 || len(next) > 0; current, next = processFields(next) {
+		if len(fields) == 0 {
+			continue
+		}
+		if fields[0] == "#define" {
+			if len(fields) < 3 {
+				ops.error("Not enough arguments to define directive")
+			} else {
+				ops.macros[fields[1]] = make([]string, len(fields[2:]))
+				copy(ops.macros[fields[1]], fields[2:])
+			}
+			continue
+		}
+		for current, next := processFields(ops, fields); len(current) > 0 || len(next) > 0; current, next = processFields(ops, next) {
 			if len(current) == 0 {
 				continue
 			}

@@ -2588,3 +2588,21 @@ func TestSemiColon(t *testing.T) {
 		`byte "test;this";;;pop;`,
 	)
 }
+func TestMacros(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	ops, _ := AssembleStringWithVersion("#define none 0\n#define one 1\npushint none; pushint one; +", 7)
+	otherOps, _ := AssembleStringWithVersion("pushint 0\npushint 1\n+", 7)
+	require.Equal(t, otherOps.Program, ops.Program)
+
+	checkSame(t,
+		"#define ==? ==; bnz\n #define one 1\n #define two 2\npushint one; pushint two; ==? label1; err; label1:; pushint one",
+		"pushint 1\npushint 2\n==\nbnz label1\nerr\nlabel1:\npushint 1",
+	)
+	checkSame(t, "#define rowSize 3\n#define columnSize 5\n#define tableDimensions rowSize columnSize\npushbytes 0x100000000000; substring tableDimensions\n#define rowSize 0\n#define columnSize 1\nsubstring tableDimensions",
+		"pushbytes 0x100000000000; substring 3 5; substring 0 1",
+	)
+	checkSame(t, "#define &x 0\n#define x load &x;\n#define &y 1\n#define y load &y;\n#define -> ; store\nint 3 -> &x; int 4 -> &y\nx y <",
+		"int 3\nstore 0\nint 4\nstore 1\nload 0\nload 1\n<",
+	)
+}
