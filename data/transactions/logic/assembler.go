@@ -1405,11 +1405,14 @@ func typecheck(expected, got StackType) bool {
 // semi-colon is quite space-like, so include it
 var spaces = [256]bool{'\t': true, ' ': true, ';': true}
 
-func fieldsFromLine(line string) []string {
-	var fields []string
+func tokensFromLine(line string) []string {
+	var tokens []string
 
 	i := 0
 	for i < len(line) && spaces[line[i]] {
+		if line[i] == ';' {
+			tokens = append(tokens, ";")
+		}
 		i++
 	}
 
@@ -1432,9 +1435,9 @@ func fieldsFromLine(line string) []string {
 			case '/': // is a comment?
 				if i < len(line)-1 && line[i+1] == '/' && !inBase64 && !inString {
 					if start != i { // if a comment without whitespace
-						fields = append(fields, line[start:i])
+						tokens = append(tokens, line[start:i])
 					}
-					return fields
+					return tokens
 				}
 			case '(': // is base64( seq?
 				prefix := line[start:i]
@@ -1454,14 +1457,14 @@ func fieldsFromLine(line string) []string {
 		// we've hit a space, end last token unless inString
 
 		if !inString {
-			field := line[start:i]
-			fields = append(fields, field)
+			token := line[start:i]
+			tokens = append(tokens, token)
 			if line[i] == ';' {
-				fields = append(fields, ";")
+				tokens = append(tokens, ";")
 			}
 			if inBase64 {
 				inBase64 = false
-			} else if field == "base64" || field == "b64" {
+			} else if token == "base64" || token == "b64" {
 				inBase64 = true
 			}
 		}
@@ -1471,7 +1474,7 @@ func fieldsFromLine(line string) []string {
 		if !inString {
 			for i < len(line) && spaces[line[i]] {
 				if line[i] == ';' {
-					fields = append(fields, ";")
+					tokens = append(tokens, ";")
 				}
 				i++
 			}
@@ -1481,10 +1484,10 @@ func fieldsFromLine(line string) []string {
 
 	// add rest of the string if any
 	if start < len(line) {
-		fields = append(fields, line[start:i])
+		tokens = append(tokens, line[start:i])
 	}
 
-	return fields
+	return tokens
 }
 
 func (ops *OpStream) trace(format string, args ...interface{}) {
@@ -1545,28 +1548,21 @@ func (ops *OpStream) trackStack(args StackTypes, returns StackTypes, instruction
 	}
 }
 
-// processFields breaks fields into a slice of tokens up to the first
-// semi-colon, and the rest.
-func processFields(ops *OpStream, fields []string) (current, rest []string) {
-	for i := 0; i < len(fields); i++ {
-		field := fields[i]
-		if len(field) > 0 && string(field[0]) == "#" {
-			directive := field[1:]
-			if directive == "pragma" {
-
-			}
-		}
-		replacement, ok := ops.macros[field]
+// splitTokens breaks tokens into two slices at the first semicolon.
+func splitTokens(ops *OpStream, tokens []string) (current, rest []string) {
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		replacement, ok := ops.macros[token]
 		if ok {
-			fields = append(fields[0:i], append(replacement, fields[i+1:]...)...)
+			tokens = append(tokens[0:i], append(replacement, tokens[i+1:]...)...)
 			i--
 			continue
 		}
-		if field == ";" {
-			return fields[:i], fields[i+1:]
+		if token == ";" {
+			return tokens[:i], tokens[i+1:]
 		}
 	}
-	return fields, nil
+	return tokens, nil
 }
 
 // assemble reads text from an input and accumulates the program
@@ -1579,40 +1575,23 @@ func (ops *OpStream) assemble(text string) error {
 	for scanner.Scan() {
 		ops.sourceLine++
 		line := scanner.Text()
-		if strings.HasPrefix(line, "//") {
-			ops.trace("%3d: comment\n", ops.sourceLine)
-			continue
-		}
-		fields := fieldsFromLine(line)
-		if len(fields) == 0 {
-			continue
-		}
-		if fields[0] == "#define" {
-			if len(fields) < 3 {
-				ops.error("Not enough arguments to define directive")
-			} else {
-				ops.macros[fields[1]] = make([]string, len(fields[2:]))
-				copy(ops.macros[fields[1]], fields[2:])
-			}
-			continue
-		}
-		for current, next := processFields(ops, fields); len(current) > 0 || len(next) > 0; current, next = processFields(ops, next) {
-			if len(current) == 0 {
+		tokens := tokensFromLine(line)
+		if len(tokens) > 0 {
+			if first := tokens[0]; first[0] == '#' {
+				directive := first[1:]
+				switch directive {
+				case "pragma":
+					ops.pragma(tokens)
+					ops.trace("%3d: #pragma line\n", ops.sourceLine)
+				default:
+					ops.errorf("Unknown directive: %s", directive)
+				}
 				continue
 			}
-			opstring := current[0]
-			if opstring == "#pragma" {
-				ops.trace("%3d: #pragma line\n", ops.sourceLine)
-				// pragma get the rest of the tokens
-				pragmaFields := make([]string, len(current)+len(next)+1)
-				if copy(pragmaFields, current) < len(pragmaFields)-1 {
-					pragmaFields[len(current)] = ";"
-					copy(pragmaFields[len(current)+1:], next)
-				} else {
-					pragmaFields = pragmaFields[0:len(current)]
-				}
-				ops.pragma(pragmaFields)
-				break
+		}
+		for current, next := splitTokens(ops, tokens); len(current) > 0 || len(next) > 0; current, next = splitTokens(ops, next) {
+			if len(current) == 0 {
+				continue
 			}
 			// we're about to begin processing opcodes, so settle the Version
 			if ops.Version == assemblerNoVersion {
@@ -1621,6 +1600,7 @@ func (ops *OpStream) assemble(text string) error {
 			if ops.versionedPseudoOps == nil {
 				ops.versionedPseudoOps = prepareVersionedPseudoTable(ops.Version)
 			}
+			opstring := current[0]
 			if opstring[len(opstring)-1] == ':' {
 				ops.createLabel(opstring[:len(opstring)-1])
 				current = current[1:]
@@ -1696,20 +1676,20 @@ func (ops *OpStream) assemble(text string) error {
 	return nil
 }
 
-func (ops *OpStream) pragma(fields []string) error {
-	if fields[0] != "#pragma" {
-		return ops.errorf("invalid syntax: %s", fields[0])
+func (ops *OpStream) pragma(tokens []string) error {
+	if tokens[0] != "#pragma" {
+		return ops.errorf("invalid syntax: %s", tokens[0])
 	}
-	if len(fields) < 2 {
+	if len(tokens) < 2 {
 		return ops.error("empty pragma")
 	}
-	key := fields[1]
+	key := tokens[1]
 	switch key {
 	case "version":
-		if len(fields) < 3 {
+		if len(tokens) < 3 {
 			return ops.error("no version value")
 		}
-		value := fields[2]
+		value := tokens[2]
 		var ver uint64
 		if ops.pending.Len() > 0 {
 			return ops.error("#pragma version is only allowed before instructions")
@@ -1734,10 +1714,10 @@ func (ops *OpStream) pragma(fields []string) error {
 		}
 		return nil
 	case "typetrack":
-		if len(fields) < 3 {
+		if len(tokens) < 3 {
 			return ops.error("no typetrack value")
 		}
-		value := fields[2]
+		value := tokens[2]
 		on, err := strconv.ParseBool(value)
 		if err != nil {
 			return ops.errorf("bad #pragma typetrack: %#v", value)
