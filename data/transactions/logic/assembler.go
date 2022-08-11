@@ -1583,6 +1583,9 @@ func (ops *OpStream) assemble(text string) error {
 				case "pragma":
 					ops.pragma(tokens)
 					ops.trace("%3d: #pragma line\n", ops.sourceLine)
+				case "define":
+					ops.define(tokens)
+					ops.trace("%3d: #define line\n", ops.sourceLine)
 				default:
 					ops.errorf("Unknown directive: %s", directive)
 				}
@@ -1673,6 +1676,18 @@ func (ops *OpStream) assemble(text string) error {
 		return fmt.Errorf("%d errors", l)
 	}
 	ops.Program = program
+	return nil
+}
+
+func (ops *OpStream) define(tokens []string) error {
+	if tokens[0] != "#define" {
+		return ops.errorf("invalid syntax: %s", tokens[0])
+	}
+	if len(tokens) < 3 {
+		return ops.errorf("define directive requires a name and body")
+	}
+	ops.macros[tokens[1]] = make([]string, len(tokens[2:]))
+	copy(ops.macros[tokens[1]], tokens[2:])
 	return nil
 }
 
