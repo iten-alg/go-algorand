@@ -1152,6 +1152,51 @@ func TestFieldsFromLine(t *testing.T) {
 	check(`"" // test`, `""`)
 	check("int 1; int 2", "int", "1", ";", "int", "2")
 	check("int 1;;;int 2", "int", "1", ";", ";", ";", "int", "2")
+	check("int 1; ;int 2;; ; ;; ", "int", "1", ";", ";", "int", "2", ";", ";", ";", ";", ";")
+	check(";", ";")
+	check("; ; ;;;;", ";", ";", ";", ";", ";", ";")
+	check(" ;", ";")
+	check(" ; ", ";")
+}
+
+func TestSplitTokens(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	ops := newOpStream(AssemblerMaxVersion)
+
+	check := func(tokens []string, left []string, right []string) {
+		t.Helper()
+		current, next := splitTokens(&ops, tokens)
+		assert.Equal(t, left, current)
+		assert.Equal(t, right, next)
+	}
+
+	check([]string{"hey,", "how's", ";", ";", "it", "going", ";"},
+		[]string{"hey,", "how's"},
+		[]string{";", "it", "going", ";"},
+	)
+
+	check([]string{";"},
+		[]string{},
+		[]string{},
+	)
+
+	check([]string{";", "it", "going"},
+		[]string{},
+		[]string{"it", "going"},
+	)
+
+	check([]string{"hey,", "how's"},
+		[]string{"hey,", "how's"},
+		nil,
+	)
+
+	check([]string{`"hey in quotes;"`, "getting", `";"`, ";", "tricky"},
+		[]string{`"hey in quotes;"`, "getting", `";"`},
+		[]string{"tricky"},
+	)
+
 }
 
 func TestAssembleRejectNegJump(t *testing.T) {
@@ -2564,7 +2609,7 @@ func checkSame(t *testing.T, version uint64, first string, compares ...string) {
 	for _, compare := range compares {
 		other, err := AssembleStringWithVersion(compare, version)
 		assert.NoError(t, err, compare)
-		assert.Equal(t, other.Program, ops.Program, "%s unlike %s", first, compare)
+		assert.Equal(t, ops.Program, other.Program, "%s unlike %s", first, compare)
 	}
 }
 
@@ -2591,63 +2636,85 @@ func TestSemiColon(t *testing.T) {
 		`byte "test;this";;;pop;`,
 	)
 }
+
 func TestMacros(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
 
 	checkSame(t, AssemblerMaxVersion, `
+		pushint 0; pushint 1; +`, `
+
 		#define none 0
 		#define one 1
-		pushint none; pushint one; +`, `
-
-		pushint 0; pushint 1; +`,
+		pushint none; pushint one; +`,
 	)
 
 	checkSame(t, AssemblerMaxVersion, `
-		#define ==? ==; bnz
-		#define one 1
-		#define two 2
-		pushint one; pushint two; ==? label1
-		err
-		label1: 
-		pushint one`, `
-
 		pushint 1
 		pushint 2
 		==
 		bnz label1
 		err
 		label1:
-		pushint 1`,
+		pushint 1`, `
+
+		#define ==? ==; bnz
+		#define one 1
+		#define two 2
+		pushint one; pushint two; ==? label1
+		err
+		label1: 
+		pushint one`,
 	)
 
 	checkSame(t, AssemblerMaxVersion, `
+		pushbytes 0x100000000000; substring 3 5; substring 0 1`, `
+
 		#define rowSize 3
 		#define columnSize 5
 		#define tableDimensions rowSize columnSize
 		pushbytes 0x100000000000; substring tableDimensions
 		#define rowSize 0
 		#define columnSize 1
-		substring tableDimensions`, `
-
-		pushbytes 0x100000000000; substring 3 5; substring 0 1`,
+		substring tableDimensions`,
 	)
 
 	checkSame(t, AssemblerMaxVersion, `
-		#define &x 0
-		#define x load &x;
-		#define &y 1
-		#define y load &y;
-		#define -> ; store
-		int 3 -> &x; int 4 -> &y
-		x y <`, `
-
 		int 3
 		store 0
 		int 4
 		store 1
 		load 0
 		load 1
-		<`,
+		<`, `
+
+		#define &x 0
+		#define x load &x;
+		#define &y 1
+		#define y load &y;
+		#define -> ; store
+		int 3 -> &x; int 4 -> &y
+		x y <`,
 	)
+
+	testProg(t, `
+		#define x a b
+		#define b c a
+		#define hey wat's up x
+		#define c woah hey
+		int 1
+		c`,
+		AssemblerMaxVersion, Expect{5, "Macro cycle discovered: c -> hey -> x -> b -> c"}, Expect{7, "unknown opcode: c"},
+	)
+
+	testProg(t, `
+		#define c +
+		#define x a c
+		#define b x
+		#define c b
+		int 1
+		c`,
+		AssemblerMaxVersion, Expect{5, "Macro cycle discovered: c -> b -> x -> c"}, Expect{7, "+ expects..."},
+	)
+
 }

@@ -1402,14 +1402,14 @@ func typecheck(expected, got StackType) bool {
 	return expected == got
 }
 
-// semi-colon is quite space-like, so include it
-var spaces = [256]bool{'\t': true, ' ': true, ';': true}
+// newline not included since handled in scanner
+var tokenSeparators = [256]bool{'\t': true, ' ': true, ';': true}
 
 func tokensFromLine(line string) []string {
 	var tokens []string
 
 	i := 0
-	for i < len(line) && spaces[line[i]] {
+	for i < len(line) && tokenSeparators[line[i]] {
 		if line[i] == ';' {
 			tokens = append(tokens, ";")
 		}
@@ -1420,11 +1420,11 @@ func tokensFromLine(line string) []string {
 	inString := false // tracked to allow spaces and comments inside
 	inBase64 := false // tracked to allow '//' inside
 	for i < len(line) {
-		if !spaces[line[i]] { // if not space
+		if !tokenSeparators[line[i]] { // if not space
 			switch line[i] {
 			case '"': // is a string literal?
 				if !inString {
-					if i == 0 || i > 0 && spaces[line[i-1]] {
+					if i == 0 || i > 0 && tokenSeparators[line[i-1]] {
 						inString = true
 					}
 				} else {
@@ -1472,7 +1472,7 @@ func tokensFromLine(line string) []string {
 
 		// gobble up consecutive whitespace (but notice semis)
 		if !inString {
-			for i < len(line) && spaces[line[i]] {
+			for i < len(line) && tokenSeparators[line[i]] {
 				if line[i] == ';' {
 					tokens = append(tokens, ";")
 				}
@@ -1548,7 +1548,7 @@ func (ops *OpStream) trackStack(args StackTypes, returns StackTypes, instruction
 	}
 }
 
-// splitTokens breaks tokens into two slices at the first semicolon.
+// splitTokens breaks tokens into two slices at the first semicolon and expands macros along the way.
 func splitTokens(ops *OpStream, tokens []string) (current, rest []string) {
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
@@ -1679,6 +1679,23 @@ func (ops *OpStream) assemble(text string) error {
 	return nil
 }
 
+func (ops *OpStream) cycle(macro string, previous ...string) bool {
+	replacement, ok := ops.macros[macro]
+	if !ok {
+		return false
+	}
+	if len(previous) > 0 && macro == previous[0] {
+		ops.errorf("Macro cycle discovered: %s", strings.Join(append(previous, macro), " -> "))
+		return true
+	}
+	for _, token := range replacement {
+		if ops.cycle(token, append(previous, macro)...) {
+			return true
+		}
+	}
+	return false
+}
+
 func (ops *OpStream) define(tokens []string) error {
 	if tokens[0] != "#define" {
 		return ops.errorf("invalid syntax: %s", tokens[0])
@@ -1686,8 +1703,16 @@ func (ops *OpStream) define(tokens []string) error {
 	if len(tokens) < 3 {
 		return ops.errorf("define directive requires a name and body")
 	}
+	saved, ok := ops.macros[tokens[1]]
 	ops.macros[tokens[1]] = make([]string, len(tokens[2:]))
 	copy(ops.macros[tokens[1]], tokens[2:])
+	if ops.cycle(tokens[1]) {
+		if ok {
+			ops.macros[tokens[1]] = saved
+		} else {
+			delete(ops.macros, tokens[1])
+		}
+	}
 	return nil
 }
 
