@@ -3012,6 +3012,123 @@ func leadingZeros(size int, b *big.Int) ([]byte, error) {
 	return buf, nil
 }
 
+func opEccG1Add(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254G1Add(cx)
+	} else {
+		return opBLS12381G1Add(cx)
+	}
+}
+
+func opEccG2Add(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254G2Add(cx)
+	} else {
+		return opBLS12381G2Add(cx)
+	}
+}
+
+func opEccG1Mul(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254G1ScalarMul(cx)
+	} else {
+		return opBLS12381G1ScalarMul(cx)
+	}
+}
+
+func opEccG2Mul(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254G2ScalarMul(cx)
+	} else {
+		return opBLS12381G2ScalarMul(cx)
+	}
+}
+
+func opEccG1MultiExp(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254G1MultiExponentiation(cx)
+	} else {
+		return opBLS12381G1MultiExponentiation(cx)
+	}
+}
+
+func opEccG2MultiExp(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254G2MultiExponentiation(cx)
+	} else {
+		return opBLS12381G2MultiExponentiation(cx)
+	}
+}
+
+func opEccPairing(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254Pairing(cx)
+	} else {
+		return opBLS12381Pairing(cx)
+	}
+}
+
+func opMapToCurveG1(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254MapFpToG1(cx)
+	} else {
+		return opBLS12381MapFpToG1(cx)
+	}
+}
+
+func opMapToCurveG2(cx *EvalContext) error {
+	eccCurve := EccCurve(cx.program[cx.pc+1])
+	fs, ok := eccCurveSpecByField(eccCurve)
+	if !ok || fs.version > cx.version {
+		return fmt.Errorf("invalid curve %d", eccCurve)
+	}
+	if fs.field == BN254 {
+		return opBN254MapFpToG2(cx)
+	} else {
+		return opBLS12381MapFpToG2(cx)
+	}
+}
+
 var ecdsaVerifyCosts = []int{
 	Secp256k1: 1700,
 	Secp256r1: 2500,

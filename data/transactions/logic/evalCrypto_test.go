@@ -797,7 +797,7 @@ func benchmarkBn256DataGenData(b *testing.B) (data []benchmarkBn256Data) {
 		var a bn254.G1Affine
 		a.ScalarMultiplication(&g1GenAff, new(big.Int).SetUint64(mrand.Uint64()))
 
-		data[i].a = bN254G1ToBytes(&a)
+		data[i].a = bn254G1ToBytes(&a)
 		data[i].k = new(big.Int).SetUint64(mrand.Uint64()).Bytes()
 
 		// Pair one g1 and one g2
@@ -837,8 +837,8 @@ func benchmarkBn256(b *testing.B, source string) {
 
 func BenchmarkBn256AddRaw(b *testing.B) {
 	data := benchmarkBn256DataGenData(b)
-	a1 := bytesToBN254G1(data[0].g1)
-	a2 := bytesToBN254G1(data[0].g1)
+	a1, _ := bytesToBN254G1(data[0].g1)
+	a2, _ := bytesToBN254G1(data[0].g1)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -846,24 +846,10 @@ func BenchmarkBn256AddRaw(b *testing.B) {
 	}
 }
 
-func BenchmarkBn256AddWithMarshal(b *testing.B) {
-	b.ResetTimer()
-	var v [][]byte
-	v = make([][]byte, b.N)
-	g1, _ := hex.DecodeString("0ebc9fc712b13340c800793386a88385e40912a21bacad2cc7db17d36e54c802238449426931975cced7200f08681ab9a86a2e5c2336cf625451cf2413318e32")
-
-	for i := 0; i < b.N; i++ {
-		a1 := bytesToBN254G1(g1)
-		a2 := bytesToBN254G1(g1)
-		r := new(bn254.G1Affine).Add(&a1, &a2)
-		v[i] = r.Marshal()
-	}
-}
-
 func BenchmarkBn256PairingRaw(b *testing.B) {
 	data := benchmarkBn256DataGenData(b)
-	g1s := bytesToBN254G1s(data[0].g1)
-	g2s := bytesToBN254G2s(data[0].g2)
+	g1s, _ := bytesToBN254G1s(data[0].g1)
+	g2s, _ := bytesToBN254G2s(data[0].g2)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -873,26 +859,26 @@ func BenchmarkBn256PairingRaw(b *testing.B) {
 }
 
 func BenchmarkBn256(b *testing.B) {
-	b.Run("bn256 add", func(b *testing.B) {
-		benchmarkOperation(b, "byte 0x0ebc9fc712b13340c800793386a88385e40912a21bacad2cc7db17d36e54c802238449426931975cced7200f08681ab9a86a2e5c2336cf625451cf2413318e32", "dup; bn256_add", "pop; int 1")
+	b.Run("eccG1+ BN254", func(b *testing.B) {
+		benchmarkOperation(b, "byte 0x0ebc9fc712b13340c800793386a88385e40912a21bacad2cc7db17d36e54c802238449426931975cced7200f08681ab9a86a2e5c2336cf625451cf2413318e32", "dup; eccG1+ BN254", "pop; int 1")
 	})
 
-	b.Run("bn256 scalar mul", func(b *testing.B) {
+	b.Run("eccG1* BN254", func(b *testing.B) {
 		source := `#pragma version 7
 arg 0
 arg 1
-bn256_scalar_mul
+eccG1* BN254
 pop
 int 1
 `
 		benchmarkBn256(b, source)
 	})
 
-	b.Run("bn256 pairing", func(b *testing.B) {
+	b.Run("eccPairing BN254", func(b *testing.B) {
 		source := `#pragma version 7
 arg 2
 arg 3
-bn256_pairing
+eccPairing BN254
 pop
 int 1
 `

@@ -657,6 +657,67 @@ var EcdsaCurves = FieldGroup{
 	ecdsaCurveSpecByName,
 }
 
+// EccCurve is an enum for `ecc_` opcodes
+type EccCurve int
+
+const (
+	BN254 EccCurve = iota
+	BLS12381
+	invalidEccCurve // compile-time constant for number of fields
+)
+
+var eccCurveNames [invalidEccCurve]string
+
+type eccCurveSpec struct {
+	field   EccCurve
+	version uint64
+	doc     string
+}
+
+func (fs eccCurveSpec) Field() byte {
+	return byte(fs.field)
+}
+func (fs eccCurveSpec) Type() StackType {
+	return StackNone // Will not show, since all are untyped
+}
+func (fs eccCurveSpec) OpVersion() uint64 {
+	return pairingVersion
+}
+func (fs eccCurveSpec) Version() uint64 {
+	return fs.version
+}
+func (fs eccCurveSpec) Note() string {
+	return fs.doc
+}
+
+var eccCurveSpecs = [...]eccCurveSpec{
+	{BN254, pairingVersion, "BN254 curve, used for pairing reliant schemes"},
+	{BLS12381, pairingVersion, "BLS12-381 curve, thought to be more secure than BN254"},
+}
+
+func eccCurveSpecByField(c EccCurve) (eccCurveSpec, bool) {
+	if int(c) >= len(eccCurveSpecs) {
+		return eccCurveSpec{}, false
+	}
+	return eccCurveSpecs[c], true
+}
+
+var eccCurveSpecByName = make(eccCurveNameSpecMap, len(eccCurveNames))
+
+type eccCurveNameSpecMap map[string]eccCurveSpec
+
+func (s eccCurveNameSpecMap) get(name string) (FieldSpec, bool) {
+	fs, ok := s[name]
+	return fs, ok
+}
+
+// EccCurves collects details about the constants used to describe EccCurves
+var EccCurves = FieldGroup{
+	"ECC", "Curves",
+	eccCurveNames[:],
+	eccCurveSpecByName,
+}
+
 // Base64Encoding is an enum for the `base64decode` opcode
 type Base64Encoding int
 
@@ -1130,6 +1191,13 @@ func init() {
 		equal(int(s.field), i)
 		ecdsaCurveNames[s.field] = s.field.String()
 		ecdsaCurveSpecByName[s.field.String()] = s
+	}
+
+	equal(len(eccCurveSpecs), len(eccCurveNames))
+	for i, s := range eccCurveSpecs {
+		equal(int(s.field), i)
+		eccCurveNames[s.field] = s.field.String()
+		eccCurveSpecByName[s.field.String()] = s
 	}
 
 	equal(len(base64EncodingSpecs), len(base64EncodingNames))

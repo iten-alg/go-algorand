@@ -524,6 +524,8 @@ var OpSpecs = []OpSpec{
 	{0x81, "pushint", opPushInt, proto(":i"), 3, constants(asmPushInt, opPushInt, "uint", immInt)},
 
 	{0x84, "ed25519verify_bare", opEd25519VerifyBare, proto("bbb:i"), 7, costly(1900)},
+	{0x85, "eccG1MapToCurve", opMapToCurveG1, proto("b:b"), pairingVersion, field("v", &EccCurves)},
+	{0x86, "eccG2MapToCurve", opMapToCurveG2, proto("b:b"), pairingVersion, field("v", &EccCurves)},
 
 	// "Function oriented"
 	{0x88, "callsub", opCallSub, proto(":"), 4, opBranch()},
@@ -544,9 +546,13 @@ var OpSpecs = []OpSpec{
 	{0x98, "sha3_256", opSHA3_256, proto("b:b"), unlimitedStorage, costByLength(58, 4, 8)},},
 	*/
 
-	{0x99, "bn256_add", opBn256Add, proto("bb:b"), pairingVersion, costly(70)},
-	{0x9a, "bn256_scalar_mul", opBn256ScalarMul, proto("bb:b"), pairingVersion, costly(970)},
-	{0x9b, "bn256_pairing", opBn256Pairing, proto("bb:i"), pairingVersion, costly(8700)},
+	{0x99, "eccG1+", opEccG1Add, proto("bb:b"), pairingVersion, field("v", &EccCurves)},
+	{0x9a, "eccG1*", opEccG1Mul, proto("bb:b"), pairingVersion, field("v", &EccCurves)},
+	{0x9b, "eccPairing", opEccPairing, proto("bb:i"), pairingVersion, field("v", &EccCurves)},
+	{0x9c, "eccG2+", opEccG2Add, proto("bb:b"), pairingVersion, field("v", &EccCurves)},
+	{0x9d, "eccG2*", opEccG2Mul, proto("bb:b"), pairingVersion, field("v", &EccCurves)},
+	{0x9e, "eccG1MultiExp", opEccG1MultiExp, proto("bb:b"), pairingVersion, field("v", &EccCurves)},
+	{0x9f, "eccG2MultiExp", opEccG2MultiExp, proto("bb:b"), pairingVersion, field("v", &EccCurves)},
 	// leave room here for eip-2537 style opcodes
 
 	// Byteslice math.
