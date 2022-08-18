@@ -33,7 +33,7 @@ import (
 /* IMPORTANT
 ->bn254 op funcs seem to not check if the supplied points are on the curve, or even the proper length (including scalars' lengths)
 ->bn254 pairing does not check if points are in correct subgroup
-->this seems not good
+->this seems not good:
 
 ->unclear when we should error vs when we should put some kind of nil val on the stack
 
@@ -42,11 +42,23 @@ import (
 ->eth also often uses concatenation when we use separate stack elements
 
 ->per https://github.com/matter-labs/eip1962/blob/master/documentation/ABI.md it seems it is expected that not all of the pairs
-in pairing op require subgroup check
+in pairing op require subgroup check: -> we decided against doing this
 
 ->eth precompile states we need to check if int representation of field element is strictly less than modulus
 ->we did not originally do this in bn254 PR
 ->unclear if we need to since it seems anything modulus above would get reduced in SetBytes but not sure
+*/
+
+/*Things to do
+->Add < modulus check for every field element
+->Add subgroup check op
+->For now do both subgroup and curve check in pairing, ask gnark about it
+*/
+
+/*Remaining questions
+->What conditions should cause pairing to error vs put false on stack vs ignore point?
+->Empty inputs
+->Confirm with gnark whether or not IsInSubgroup() also checks if point on curve. If not, they have a problem
 */
 const (
 	bls12381fpSize  = 48
@@ -348,8 +360,7 @@ func opBLS12381MapFpToG1(cx *EvalContext) error {
 	if len(fpBytes) != bls12381fpSize {
 		return errors.New("Bad input")
 	}
-	// should be MapToG1 in most recent version
-	point := bls12381.MapToCurveG1Svdw(bytesToBLS12381Field(fpBytes))
+	point := bls12381.MapToG1(bytesToBLS12381Field(fpBytes))
 	cx.stack[last].Bytes = bls12381G1ToBytes(&point)
 	return nil
 }
@@ -364,37 +375,53 @@ func opBLS12381MapFpToG2(cx *EvalContext) error {
 	fp2 := new(bls12381.G2Affine).X
 	fp2.A0 = bytesToBLS12381Field(fpBytes[0:bls12381fpSize])
 	fp2.A1 = bytesToBLS12381Field(fpBytes[bls12381fpSize:])
-	point := bls12381.MapToCurveG2Svdw(fp2)
+	point := bls12381.MapToG2(fp2)
 	cx.stack[last].Bytes = bls12381G2ToBytes(&point)
 	return nil
 }
 
-func bytesToBN254Field(b []byte) (ret BN254fp.Element) {
-	ret.SetBytes(b)
-	return
+func bytesToBN254Field(b []byte) (BN254fp.Element, error) {
+	intRepresentation := new(big.Int).SetBytes(b)
+	if intRepresentation.Cmp(BN254fp.Modulus()) >= 0 {
+		return BN254fp.Element{}, errors.New("Field element larger than modulus")
+	}
+	return *new(BN254fp.Element).SetBigInt(intRepresentation), nil
 }
 
-func bytesToBN254G1(b []byte) (ret bn254.G1Affine, err error) {
+func bytesToBN254G1(b []byte) (bn254.G1Affine, error) {
+	var point bn254.G1Affine
+	var err error
 	if len(b) != bn254g1Size {
-		return ret, errors.New("Improper encoding")
+		return point, errors.New("Improper encoding")
 	}
-	ret.X = bytesToBN254Field(b[:bn254fpSize])
-	ret.Y = bytesToBN254Field(b[bn254fpSize:bn254g1Size])
-	if !ret.IsOnCurve() {
+	point.X, err = bytesToBN254Field(b[:bn254fpSize])
+	if err != nil {
+		return bn254.G1Affine{}, err
+	}
+	point.Y, err = bytesToBN254Field(b[bn254fpSize:bn254g1Size])
+	if err != nil {
+		return bn254.G1Affine{}, err
+	}
+	if !point.IsOnCurve() {
 		return bn254.G1Affine{}, errors.New("Point not on curve")
 	}
-	return
+	return point, nil
 }
 
 // The gnark library suggests that IsInSubgroup() additionally checks if point is on curve
-// So we have an extra func here to avoid checking twice
-func pairingBytesToBN254G1(b []byte) (ret bn254.G1Affine, err error) {
+// So we have an extra func here to avoid checking if point is on curve twice
+func pairingBytesToBN254G1(b []byte) (bn254.G1Affine, error) {
+	var point bn254.G1Affine
+	var err error
 	if len(b) != bn254g1Size {
-		return ret, errors.New("Improper encoding")
+		return point, errors.New("Improper encoding")
 	}
-	ret.X = bytesToBN254Field(b[:bn254fpSize])
-	ret.Y = bytesToBN254Field(b[bn254fpSize:bn254g1Size])
-	return
+	point.X, err = bytesToBN254Field(b[:bn254fpSize])
+	if err != nil {
+		return bn254.G1Affine{}, err
+	}
+	point.Y, err = bytesToBN254Field(b[bn254fpSize:bn254g1Size])
+	return point, err
 }
 
 func bytesToBN254G1s(b []byte) ([]bn254.G1Affine, error) {
@@ -658,7 +685,7 @@ func opBN254MapFpToG1(cx *EvalContext) error {
 		return errors.New("Bad input")
 	}
 	// should be MapToG1 in most recent version
-	point := bn254.MapToCurveG1Svdw(bytesToBN254Field(fpBytes))
+	point := bn254.MapToG1(bytesToBN254Field(fpBytes))
 	cx.stack[last].Bytes = bn254G1ToBytes(&point)
 	return nil
 }
@@ -673,7 +700,7 @@ func opBN254MapFpToG2(cx *EvalContext) error {
 	fp2 := new(bn254.G2Affine).X
 	fp2.A0 = bytesToBN254Field(fpBytes[0:bn254fpSize])
 	fp2.A1 = bytesToBN254Field(fpBytes[bn254fpSize:])
-	point := bn254.MapToCurveG2Svdw(fp2)
+	point := bn254.MapToG2(fp2)
 	cx.stack[last].Bytes = bn254G2ToBytes(&point)
 	return nil
 }
