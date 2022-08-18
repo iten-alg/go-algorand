@@ -28,11 +28,13 @@ import (
 	"github.com/algorand/go-algorand/protocol"
 )
 
+var docVersion = 7
+
 func opGroupMarkdownTable(names []string, out io.Writer) {
 	fmt.Fprint(out, `| Opcode | Description |
 | - | -- |
 `)
-	opSpecs := logic.OpsByName[logic.LogicVersion]
+	opSpecs := logic.OpsByName[docVersion]
 	for _, opname := range names {
 		spec, ok := opSpecs[opname]
 		if !ok {
@@ -254,7 +256,6 @@ func opToMarkdown(out io.Writer, specs []logic.OpSpec, groupDocWritten map[strin
 
 func opsToMarkdown(out io.Writer) (err error) {
 	out.Write([]byte("# Opcodes\n\nOps have a 'cost' of 1 unless otherwise specified.\n\n"))
-
 	written := make(map[string]bool)
 	for _, name := range logic.OpNames {
 		specs := logic.SpecsByName(name)
@@ -353,7 +354,7 @@ func argEnums(name string) ([]string, string) {
 func buildLanguageSpec(opGroups map[string][]string) *LanguageSpec {
 	records := make([]OpRecord, len(logic.OpNames))
 	for i, name := range logic.OpNames {
-		spec := logic.OpsByName[logic.LogicVersion][name]
+		spec := logic.OpsByName[docVersion][name]
 		records[i].Opcode = spec.Opcode
 		records[i].Name = spec.Name
 		records[i].Args = typeString(spec.Arg.Types)
@@ -367,7 +368,7 @@ func buildLanguageSpec(opGroups map[string][]string) *LanguageSpec {
 		//TODO: Add multi-op support
 	}
 	return &LanguageSpec{
-		EvalMaxVersion:  logic.LogicVersion,
+		EvalMaxVersion:  docVersion,
 		LogicSigVersion: config.Consensus[protocol.ConsensusCurrentVersion].LogicSigVersion,
 		Ops:             records,
 	}
@@ -403,7 +404,7 @@ func main() {
 
 	written := make(map[string]bool)
 	for _, name := range logic.OpNames {
-		spec := logic.OpsByName[logic.LogicVersion][name]
+		spec := logic.OpsByName[docVersion][name]
 		for _, imm := range spec.OpDetails.Immediates {
 			if imm.Group != nil && !written[imm.Group.Name] {
 				out := create(strings.ToLower(imm.Group.Name) + "_fields.md")

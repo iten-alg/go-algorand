@@ -24,8 +24,8 @@ import (
 	"strings"
 )
 
-// LogicVersion defines max eval version
-const LogicVersion = 7
+// LogicVersion defines default assembler and max eval versions
+const LogicVersion = 8
 
 // rekeyingEnabledVersion is the version of TEAL where RekeyTo functionality
 // was enabled. This is important to remember so that old TEAL accounts cannot
@@ -65,7 +65,7 @@ const appAddressAvailableVersion = 7
 
 const fidoVersion = 7       // base64, json, secp256r1
 const randomnessVersion = 7 // vrf_verify, block
-const multiVersion = 7
+const multiVersion = 8
 
 // EXPERIMENTAL. These should be revisited whenever a new LogicSigVersion is
 // moved from vFuture to a new consensus version. If they remain unready, bump
