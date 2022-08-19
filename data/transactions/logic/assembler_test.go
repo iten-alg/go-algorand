@@ -1164,13 +1164,16 @@ func TestFieldsFromLine(t *testing.T) {
 	check(" ; ", ";")
 }
 
-func TestSplitTokens(t *testing.T) {
+func TestNextStatement(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
 
+	// this test ensures nextStatement splits tokens on semicolons properly
+	// macro testing should be handled in TestMacros
+	ops := newOpStream(AssemblerMaxVersion)
 	check := func(tokens []string, left []string, right []string) {
 		t.Helper()
-		current, next := splitTokens(tokens)
+		current, next := nextStatement(&ops, tokens)
 		assert.Equal(t, left, current)
 		assert.Equal(t, right, next)
 	}
@@ -2613,7 +2616,7 @@ func checkSame(t *testing.T, version uint64, first string, compares ...string) {
 	for _, compare := range compares {
 		other, err := AssembleStringWithVersion(compare, version)
 		assert.NoError(t, err, compare)
-		assert.Equal(t, other.Program, ops.Program, "%s unlike %s", first, compare)
+		assert.Equal(t, ops.Program, other.Program, "%s unlike %s", first, compare)
 	}
 }
 
@@ -2639,4 +2642,142 @@ func TestSemiColon(t *testing.T) {
 		`byte "test;this"; ; pop;`,
 		`byte "test;this";;;pop;`,
 	)
+}
+
+func TestMacros(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	checkSame(t, AssemblerMaxVersion, `
+		pushint 0; pushint 1; +`, `
+		#define none 0
+		#define one 1
+		pushint none; pushint one; +`,
+	)
+
+	checkSame(t, AssemblerMaxVersion, `
+		pushint 1
+		pushint 2
+		==
+		bnz label1
+		err
+		label1:
+		pushint 1`, `
+		#define ==? ==; bnz
+		#define one 1
+		#define two 2
+		pushint one; pushint two; ==? label1
+		err
+		label1: 
+		pushint one`,
+	)
+
+	checkSame(t, AssemblerMaxVersion, `
+		pushbytes 0x100000000000; substring 3 5; substring 0 1`, `
+		#define rowSize 3
+		#define columnSize 5
+		#define tableDimensions rowSize columnSize
+		pushbytes 0x100000000000; substring tableDimensions
+		#define rowSize 0
+		#define columnSize 1
+		substring tableDimensions`,
+	)
+
+	checkSame(t, AssemblerMaxVersion, `
+		int 3
+		store 0
+		int 4
+		store 1
+		load 0
+		load 1
+		<`, `
+		#define &x 0
+		#define x load &x;
+		#define &y 1
+		#define y load &y;
+		#define -> ; store
+		int 3 -> &x; int 4 -> &y
+		x y <`,
+	)
+
+	testProg(t, `
+		#define x a d
+		#define d c a
+		#define hey wat's up x
+		#define c woah hey
+		int 1
+		c`,
+		AssemblerMaxVersion, Expect{5, "Macro cycle discovered: c -> hey -> x -> d -> c"}, Expect{7, "unknown opcode: c"},
+	)
+
+	testProg(t, `
+		#define c +
+		#define x a c
+		#define d x
+		#define c d
+		int 1
+		c`,
+		AssemblerMaxVersion, Expect{5, "Macro cycle discovered: c -> d -> x -> c"}, Expect{7, "+ expects..."},
+	)
+
+	testProg(t, `
+		#define X X
+		int 3`,
+		AssemblerMaxVersion, Expect{2, "Macro cycle discovered: X -> X"},
+	)
+
+	testProg(t, `
+		#define return random
+		#define pay randomm
+		#define NoOp randommm
+		#define + randommmm
+		#pragma version 1
+		#define return hi
+		#define + hey
+		int 1`,
+		assemblerNoVersion,
+		Expect{3, "Named constants..."},
+		Expect{4, "Named constants..."},
+		Expect{6, "+ is defined as a macro but is an opcode..."},
+		Expect{8, "Macro names cannot be opcodes: +"},
+	)
+
+	testProg(t, `
+		#define return random
+		#define pay randomm
+		#define NoOp randommm
+		#define + randommmm
+		int 1
+		#define return hi
+		#define + hey`,
+		assemblerNoVersion,
+		Expect{3, "Named constants..."},
+		Expect{4, "Named constants..."},
+		Expect{6, "+ is defined as a macro but is an opcode..."},
+		Expect{8, "Macro names cannot be opcodes: +"},
+	)
+
+	testProg(t, `
+		#define Sender hello
+		#define ApplicationArgs hiya
+		#pragma version 1
+		#define Sender helllooooo
+		#define ApplicationArgs heyyyyy
+		int 1`,
+		assemblerNoVersion,
+		Expect{4, "Sender is defined as a macro but is a field name..."},
+		Expect{5, "Macro names cannot be field names: Sender"},
+	)
+
+	testProg(t, `
+		#define Sender hello
+		#define ApplicationArgs hiya
+		int 1
+		#define Sender helllooooo
+		#define ApplicationArgs heyyyyy`,
+		assemblerNoVersion,
+		Expect{4, "Sender is defined as a macro but is a field name..."},
+		Expect{5, "Macro names cannot be field names: Sender"},
+	)
+
 }

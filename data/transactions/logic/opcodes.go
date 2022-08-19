@@ -692,6 +692,9 @@ var opsByOpcode [LogicVersion + 1][256]OpSpec
 // OpsByName map for each version, mapping opcode name to OpSpec
 var OpsByName [LogicVersion + 1]map[string]OpSpec
 
+// Keeps track of all field names accessible in each version
+var fieldNames [LogicVersion + 1]map[string]bool
+
 var totalOps int
 
 // DeprecatedVersion returns the version an OpSpec was deprecated, which is currently only
@@ -807,6 +810,20 @@ func init() {
 			}
 		}
 	}
+
+	for v := 0; v <= LogicVersion; v++ {
+		fieldNames[v] = make(map[string]bool)
+		for _, spec := range OpsByName[v] {
+			for _, imm := range spec.Immediates {
+				if imm.Group != nil {
+					for _, fieldName := range imm.Group.Names {
+						fieldNames[v][fieldName] = true
+					}
+				}
+			}
+		}
+	}
+
 	expandedSpecs := make([]OpSpec, 0, 256)
 	for _, spec := range OpSpecs {
 		expandedSpecs = append(expandedSpecs, getLeafSpecs(&spec)...)
