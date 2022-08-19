@@ -19,7 +19,6 @@ package logic
 import (
 	"bytes"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -685,54 +684,6 @@ func SpecsByName(name string) []OpSpec {
 		}
 	}
 	return specs
-}
-
-// OpcodesByVersion returns list of opcodes available in a specific version of TEAL
-// by copying v1 opcodes to v2, and then on to v3 to create a full list
-func OpcodesByVersion(version uint64) []OpSpec {
-	// for updated opcodes use the lowest version opcode was introduced in
-	maxOpcode := 0
-	for i := 0; i < len(OpSpecs); i++ {
-		if int(OpSpecs[i].Opcode) > maxOpcode {
-			maxOpcode = int(OpSpecs[i].Opcode)
-		}
-	}
-	updated := make(map[string]int, maxOpcode+1)
-	for idx := range OpSpecs {
-		name := OpSpecs[idx].Name
-		//op := serialize(GetFullCode(OpSpecs[idx]))
-		cv := updated[name]
-		if cv == 0 {
-			cv = int(OpSpecs[idx].Version)
-		} else {
-			if int(OpSpecs[idx].Version) < cv {
-				cv = int(OpSpecs[idx].Version)
-			}
-		}
-		updated[name] = cv
-	}
-
-	subv := make(map[string]OpSpec)
-	for idx := range OpSpecs {
-		if OpSpecs[idx].Version <= version {
-			//op := serialize(GetFullCode(OpSpecs[idx]))
-			name := OpSpecs[idx].Name
-			subv[name] = OpSpecs[idx]
-			// if the opcode was updated then assume backward compatibility
-			// and set version to minimum available
-			if updated[name] < int(OpSpecs[idx].Version) {
-				copy := OpSpecs[idx]
-				copy.Version = uint64(updated[name])
-				subv[name] = copy
-			}
-		}
-	}
-	result := make([]OpSpec, 0, len(subv))
-	for _, v := range subv {
-		result = append(result, v)
-	}
-	sort.Sort(sortByOpcode(result))
-	return result
 }
 
 // direct opcode bytes

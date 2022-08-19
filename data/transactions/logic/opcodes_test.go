@@ -17,7 +17,6 @@
 package logic
 
 import (
-	"bytes"
 	"fmt"
 	"reflect"
 	"testing"
@@ -57,71 +56,6 @@ func (os *OpSpec) equals(oso *OpSpec) bool {
 	}
 
 	return true
-}
-
-func TestOpcodesByVersionReordered(t *testing.T) {
-	partitiontest.PartitionTest(t)
-
-	// Make a copy to restore to the original
-	OpSpecsOrig := make([]OpSpec, len(OpSpecs))
-	for idx, opspec := range OpSpecs {
-		cp := opspec
-		OpSpecsOrig[idx] = cp
-	}
-	defer func() {
-		OpSpecs = OpSpecsOrig
-	}()
-
-	// To test the case where a newer version opcode is before an older version
-	// Change the order of opcode 0x01 so that version 2 comes before version 1
-	tmp := OpSpecs[1]
-	OpSpecs[1] = OpSpecs[4]
-	OpSpecs[4] = tmp
-
-	t.Run("TestOpcodesByVersion", testOpcodesByVersion)
-}
-
-func TestOpcodesByVersion(t *testing.T) {
-	partitiontest.PartitionTest(t)
-	testOpcodesByVersion(t)
-}
-
-func testOpcodesByVersion(t *testing.T) {
-	// Make a copy of the OpSpecs to check if OpcodesByVersion will change it
-	OpSpecs2 := make([]OpSpec, len(OpSpecs))
-	for idx, opspec := range OpSpecs {
-		cp := opspec
-		OpSpecs2[idx] = cp
-	}
-
-	opSpecs := make([][]OpSpec, LogicVersion)
-	for v := uint64(1); v <= LogicVersion; v++ {
-		t.Run(fmt.Sprintf("v=%d", v), func(t *testing.T) {
-			opSpecs[v-1] = OpcodesByVersion(v)
-			isOk := true
-			for i := 0; i < len(opSpecs[v-1])-1; i++ {
-				cur := opSpecs[v-1][i]
-				next := opSpecs[v-1][i+1]
-				// check duplicates
-				if cur.Opcode == next.Opcode && bytes.Equal(cur.MultiCode, next.MultiCode) {
-					isOk = false
-					break
-				}
-				// check sorted
-				if cur.Opcode > next.Opcode {
-					isOk = false
-					break
-				}
-
-			}
-			require.True(t, isOk)
-		})
-	}
-	require.Greater(t, len(opSpecs[1]), len(opSpecs[0]))
-
-	for idx, opspec := range OpSpecs {
-		require.True(t, opspec.equals(&OpSpecs2[idx]))
-	}
 }
 
 func TestOpcodesVersioningV2(t *testing.T) {
